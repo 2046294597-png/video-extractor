@@ -771,6 +771,7 @@
       let currentBlobUrl = null;
       let currentPlatform = null;
       let currentSourceUrl = null;
+      let currentIsPrivateChannel = false;
       let toastTimer = null;
 
       const PLATFORM_CONFIG = {
@@ -1294,8 +1295,12 @@ video::-webkit-media-controls{display:flex!important}
 
         try {
           let videoUrl;
+          currentIsPrivateChannel = false;
           if (platform === 'telegram') {
             videoUrl = await extractTelegramVideo(url);
+            if (/t\.me\/c\/\d+/.test(url)) {
+              currentIsPrivateChannel = true;
+            }
           } else if (platform === 'twitter') {
             videoUrl = await extractTwitterVideo(url);
           } else {
@@ -1303,11 +1308,15 @@ video::-webkit-media-controls{display:flex!important}
           }
 
           const httpsUrl = videoUrl.replace(/^http:\/\//i, 'https://');
-          showResult(httpsUrl, platform, url);
+
+          if (currentIsPrivateChannel) {
+            showPrivateChannelResult(httpsUrl, url);
+          } else {
+            showResult(httpsUrl, platform, url);
+          }
           saveHistory(url, platform, httpsUrl);
         } catch (err) {
           if (platform === 'telegram' && /t\.me\/c\/\d+/.test(url)) {
-            setStatus('', '');
             showPrivateChannelView(url);
             return;
           }
@@ -1327,6 +1336,7 @@ video::-webkit-media-controls{display:flex!important}
         currentVideoUrl = embedUrl;
         currentPlatform = 'telegram';
         currentSourceUrl = url;
+        currentIsPrivateChannel = true;
 
         const cfg = PLATFORM_CONFIG.telegram;
         platformTag.textContent = cfg.tagLabel;
@@ -1334,24 +1344,89 @@ video::-webkit-media-controls{display:flex!important}
         resultTitle.textContent = url;
 
         videoContainer.innerHTML = `
-          <iframe src="${embedUrl}"
-            style="width:100%;min-height:360px;border:none;background:#0f0f0f"
-            referrerpolicy="no-referrer"
-            loading="lazy"></iframe>`;
+          <div class="video-placeholder" style="padding:40px 20px;flex-direction:column;gap:16px;">
+            <span style="font-size:36px;">🔒</span>
+            <span style="font-size:16px;font-weight:700;color:#e2e8f0;">私密频道视频</span>
+            <span style="font-size:13px;color:#94a3b8;text-align:center;line-height:1.6;">
+              需要在 Telegram Web 中登录后观看<br>
+              <span style="color:#6366f1;">正在新标签页中打开...</span>
+            </span>
+            <button id="privateChannelOpenBtn"
+              style="background:linear-gradient(135deg,#6366f1,#7c3aed);color:#fff;border:none;padding:12px 28px;border-radius:22px;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;margin-top:8px;">
+              在新标签页中打开
+            </button>
+          </div>`;
 
         resultCard.classList.add('visible');
         resultCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
         saveHistory(url, 'telegram', embedUrl);
-        setStatus('🔒 私密频道 — 需登录 Telegram Web 后观看；点击下方按钮下载', '');
-        showToast('私密频道：请在浏览器登录 web.telegram.org 后刷新');
+        setStatus('🔒 私密频道 — 新标签页已打开，长按视频即可保存', '');
+
+        const btn = document.getElementById('privateChannelOpenBtn');
+        if (btn) {
+          btn.addEventListener('click', () => window.open(embedUrl, '_blank'));
+        }
+        setTimeout(() => window.open(embedUrl, '_blank'), 600);
+      }
+
+      function showPrivateChannelResult(videoUrl, sourceUrl) {
+        currentVideoUrl = videoUrl;
+        currentPlatform = 'telegram';
+        currentSourceUrl = sourceUrl;
+        currentIsPrivateChannel = true;
+
+        const cfg = PLATFORM_CONFIG.telegram;
+        platformTag.textContent = cfg.tagLabel;
+        platformTag.className = `platform-tag ${cfg.tagClass}`;
+        resultTitle.textContent = sourceUrl;
+
+        const cleanUrl = sourceUrl.replace(/\?.*$/, '').replace(/\/$/, '');
+        const embedUrl = cleanUrl + '?embed=1';
+
+        videoContainer.innerHTML = `
+          <div class="video-placeholder" style="padding:40px 20px;flex-direction:column;gap:14px;">
+            <span style="font-size:36px;">🔒</span>
+            <span style="font-size:16px;font-weight:700;color:#e2e8f0;">私密频道视频已找到</span>
+            <span style="font-size:13px;color:#94a3b8;text-align:center;line-height:1.6;">
+              视频地址已提取，但需要您的 Telegram 登录状态才能访问<br>
+              <span style="color:#6366f1;">正在新标签页中打开...</span>
+            </span>
+            <button id="privateChannelOpenBtn"
+              style="background:linear-gradient(135deg,#6366f1,#7c3aed);color:#fff;border:none;padding:12px 28px;border-radius:22px;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;margin-top:4px;">
+              在 Telegram Web 中播放
+            </button>
+            <span style="font-size:11px;color:#64748b;">打开后长按视频即可保存到手机</span>
+          </div>`;
+
+        resultCard.classList.add('visible');
+        resultCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        saveHistory(sourceUrl, 'telegram', videoUrl);
+        setStatus('🔒 私密频道 — Telegram Web 新标签页已打开', '');
+
+        const btn = document.getElementById('privateChannelOpenBtn');
+        if (btn) {
+          btn.addEventListener('click', () => window.open(embedUrl, '_blank'));
+        }
+        setTimeout(() => window.open(embedUrl, '_blank'), 600);
       }
 
       async function downloadVideo() {
         if (!currentVideoUrl) return;
 
+        if (currentIsPrivateChannel) {
+          const cleanUrl = currentSourceUrl.replace(/\?.*$/, '').replace(/\/$/, '');
+          const embedUrl = cleanUrl + '?embed=1';
+          window.open(embedUrl, '_blank');
+          if (currentVideoUrl !== embedUrl) {
+            setTimeout(() => window.open(currentVideoUrl, '_blank'), 500);
+          }
+          showToast('已在新标签页打开，登录 Telegram Web 后长按视频即可保存');
+          return;
+        }
+
         if (/t\.me/.test(currentVideoUrl)) {
           window.open(currentVideoUrl, '_blank');
-          showToast('已在新窗口打开，在视频上长按即可保存');
+          showToast('已在新标签页打开，长按视频即可保存');
           return;
         }
 
