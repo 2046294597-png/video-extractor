@@ -1320,6 +1320,10 @@ video::-webkit-media-controls{display:flex!important}
             showPrivateChannelView(url);
             return;
           }
+          if (platform === 'telegram') {
+            showPrivateChannelView(url);
+            return;
+          }
           inputWrapper.classList.add('error');
           setStatus('❌ ' + err.message, 'error');
           showToast('提取失败: ' + err.message);
@@ -1331,9 +1335,8 @@ video::-webkit-media-controls{display:flex!important}
 
       function showPrivateChannelView(url) {
         const cleanUrl = url.replace(/\?.*$/, '').replace(/\/$/, '');
-        const embedUrl = cleanUrl + '?embed=1';
 
-        currentVideoUrl = embedUrl;
+        currentVideoUrl = cleanUrl;
         currentPlatform = 'telegram';
         currentSourceUrl = url;
         currentIsPrivateChannel = true;
@@ -1359,14 +1362,14 @@ video::-webkit-media-controls{display:flex!important}
 
         resultCard.classList.add('visible');
         resultCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        saveHistory(url, 'telegram', embedUrl);
+        saveHistory(url, 'telegram', cleanUrl);
         setStatus('🔒 私密频道 — 新标签页已打开，长按视频即可保存', '');
 
         const btn = document.getElementById('privateChannelOpenBtn');
         if (btn) {
-          btn.addEventListener('click', () => window.open(embedUrl, '_blank'));
+          btn.addEventListener('click', () => window.open(cleanUrl, '_blank'));
         }
-        setTimeout(() => window.open(embedUrl, '_blank'), 600);
+        setTimeout(() => window.open(cleanUrl, '_blank'), 600);
       }
 
       function showPrivateChannelResult(videoUrl, sourceUrl) {
@@ -1381,7 +1384,6 @@ video::-webkit-media-controls{display:flex!important}
         resultTitle.textContent = sourceUrl;
 
         const cleanUrl = sourceUrl.replace(/\?.*$/, '').replace(/\/$/, '');
-        const embedUrl = cleanUrl + '?embed=1';
 
         videoContainer.innerHTML = `
           <div class="video-placeholder" style="padding:40px 20px;flex-direction:column;gap:14px;">
@@ -1405,9 +1407,9 @@ video::-webkit-media-controls{display:flex!important}
 
         const btn = document.getElementById('privateChannelOpenBtn');
         if (btn) {
-          btn.addEventListener('click', () => window.open(embedUrl, '_blank'));
+          btn.addEventListener('click', () => window.open(cleanUrl, '_blank'));
         }
-        setTimeout(() => window.open(embedUrl, '_blank'), 600);
+        setTimeout(() => window.open(cleanUrl, '_blank'), 600);
       }
 
       async function downloadVideo() {
@@ -1415,11 +1417,7 @@ video::-webkit-media-controls{display:flex!important}
 
         if (currentIsPrivateChannel) {
           const cleanUrl = currentSourceUrl.replace(/\?.*$/, '').replace(/\/$/, '');
-          const embedUrl = cleanUrl + '?embed=1';
-          window.open(embedUrl, '_blank');
-          if (currentVideoUrl !== embedUrl) {
-            setTimeout(() => window.open(currentVideoUrl, '_blank'), 500);
-          }
+          window.open(cleanUrl, '_blank');
           showToast('已在新标签页打开，登录 Telegram Web 后长按视频即可保存');
           return;
         }
