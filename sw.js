@@ -1,9 +1,7 @@
-const CACHE_NAME = 'video-extractor-v3';
+const CACHE_NAME = 'video-extractor-v4';
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    self.skipWaiting()
-  );
+  event.waitUntil(self.skipWaiting());
 });
 
 self.addEventListener('activate', (event) => {
@@ -12,15 +10,12 @@ self.addEventListener('activate', (event) => {
       return Promise.all(
         keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
       );
-    }).then(() => {
-      return self.clients.claim();
-    })
+    }).then(() => self.clients.claim())
   );
 });
 
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
-
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
 
@@ -32,9 +27,7 @@ self.addEventListener('fetch', (event) => {
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
         }
         return response;
-      }).catch((err) => {
-        return cached || new Response('', { status: 408 });
-      });
+      }).catch(() => cached || new Response('', { status: 408 }));
       return cached || fetchPromise;
     })
   );

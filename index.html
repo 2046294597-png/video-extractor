@@ -930,70 +930,96 @@
         return div.innerHTML;
       }
 
+      function buildIframeHTML(videoUrl) {
+        return `<!DOCTYPE html>
+<html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>*{margin:0;padding:0}body{background:#000;display:flex;align-items:center;justify-content:center;min-height:100vh;min-height:-webkit-fill-available}
+video{width:100%;max-height:100vh;max-height:-webkit-fill-available;display:block;outline:none}
+video::-webkit-media-controls{display:flex!important}
+.e{display:none;color:#f87171;font-size:14px;text-align:center;padding:24px;font-family:-apple-system,sans-serif;position:absolute}
+.e b{display:block;font-size:12px;color:#94a3b8;margin-top:4px}
+</style></head><body>
+<video src="${videoUrl.replace(/"/g, '&quot;')}" controls playsinline
+ onerror="document.querySelector('.e').style.display='block';this.style.display='none'"
+ onloadedmetadata="document.querySelector('.e').style.display='none'"></video>
+<div class="e">⚠ 视频被平台拦截<br><b>请使用下方按钮下载</b></div>
+</body></html>`;
+      }
+
       function showResult(videoUrl, platform, sourceUrl) {
         currentVideoUrl = videoUrl;
         currentPlatform = platform;
         currentSourceUrl = sourceUrl;
+        if (currentBlobUrl) { URL.revokeObjectURL(currentBlobUrl); currentBlobUrl = null; }
 
         const cfg = PLATFORM_CONFIG[platform];
         platformTag.textContent = cfg.tagLabel;
         platformTag.className = `platform-tag ${cfg.tagClass}`;
         resultTitle.textContent = sourceUrl;
 
-        videoContainer.innerHTML = `
-          <div class="video-placeholder">
-            <span style="display:flex;flex-direction:column;align-items:center;gap:8px;">
-              <span class="spinner" style="width:32px;height:32px;border-color:rgba(99,102,241,0.3);border-top-color:#6366f1;"></span>
-              <span style="font-size:13px;color:#94a3b8;">正在加载视频...</span>
-            </span>
-          </div>
-        `;
+        const isTwimg = /twimg\.com/i.test(videoUrl);
+        const platformIsTwitter = platform === 'twitter';
+
+        if (platformIsTwitter && isTwimg) {
+          videoContainer.innerHTML = `<iframe sandbox="allow-scripts" src="about:blank" style="width:100%;aspect-ratio:16/9;border:none;background:#000" id="videoFrame" allowfullscreen></iframe>`;
+          const frame = document.getElementById('videoFrame');
+          const blob = new Blob([buildIframeHTML(videoUrl)], { type: 'text/html' });
+          const frameUrl = URL.createObjectURL(blob);
+          frame.src = frameUrl;
+          currentBlobUrl = frameUrl;
+          setStatus('✅ 提取成功（沙箱模式加载中）', 'success');
+        } else {
+          videoContainer.innerHTML = `
+            <div class="video-placeholder">
+              <span style="display:flex;flex-direction:column;align-items:center;gap:8px;">
+                <span class="spinner" style="width:32px;height:32px;border-color:rgba(99,102,241,0.3);border-top-color:#6366f1;"></span>
+                <span style="font-size:13px;color:#94a3b8;">正在缓冲视频...</span>
+              </span>
+            </div>`;
+          setStatus('✅ 预览加载中...', 'success');
+          loadVideoViaProxy(videoUrl);
+        }
 
         resultCard.classList.add('visible');
         resultCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
 
-        loadVideoBlob(videoUrl, platform);
+      async function loadVideoViaProxy(videoUrl) {
+        const blob = await fetchVideoAsBlob(videoUrl);
+        if (blob) {
+          if (currentBlobUrl) URL.revokeObjectURL(currentBlobUrl);
+          const blobUrl = URL.createObjectURL(blob);
+          currentBlobUrl = blobUrl;
+          videoContainer.innerHTML = `<video controls playsinline preload="auto" src="${blobUrl}" type="video/mp4"></video>`;
+          setStatus('', '');
+        } else {
+          const iframeHtml = buildIframeHTML(videoUrl);
+          const blob = new Blob([iframeHtml], { type: 'text/html' });
+          if (currentBlobUrl) URL.revokeObjectURL(currentBlobUrl);
+          const frameUrl = URL.createObjectURL(blob);
+          currentBlobUrl = frameUrl;
+          videoContainer.innerHTML = `<iframe sandbox="allow-scripts allow-same-origin" src="${frameUrl}" style="width:100%;aspect-ratio:16/9;border:none;background:#000" allowfullscreen></iframe>`;
+          setStatus('', '');
+        }
       }
 
       async function fetchVideoAsBlob(videoUrl) {
         const proxyFns = [
           (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-          (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+          (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
         ];
-
         for (const fn of proxyFns) {
           try {
-            const resp = await fetch(fn(videoUrl));
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), 25000);
+            const resp = await fetch(fn(videoUrl), { signal: ctrl.signal });
+            clearTimeout(timer);
             if (!resp.ok) continue;
             const blob = await resp.blob();
-            if (blob.size > 0) return blob;
+            if (blob.size > 1000) return blob;
           } catch { continue; }
         }
-
         return null;
-      }
-
-      async function loadVideoBlob(videoUrl, platform) {
-        const blob = await fetchVideoAsBlob(videoUrl);
-        if (blob) {
-          const blobUrl = URL.createObjectURL(blob);
-          currentBlobUrl = blobUrl;
-          videoContainer.innerHTML = `
-            <video controls playsinline preload="auto" src="${blobUrl}" type="video/mp4">
-              您的浏览器不支持视频播放
-            </video>
-          `;
-        } else {
-          videoContainer.innerHTML = `
-            <div class="video-placeholder">
-              <span style="display:flex;flex-direction:column;align-items:center;gap:8px;">
-                <span style="font-size:20px;">⚠️</span>
-                <span style="font-size:14px;color:#ef4444;">视频加载失败 - 已被防盗链拦截</span>
-                <span style="font-size:12px;color:#94a3b8;">请点击「下载视频」或「复制链接」后自行保存</span>
-              </span>
-            </div>
-          `;
-        }
       }
 
       async function extractTelegramVideo(url) {
@@ -1219,7 +1245,6 @@
           const httpsUrl = videoUrl.replace(/^http:\/\//i, 'https://');
           showResult(httpsUrl, platform, url);
           saveHistory(url, platform, httpsUrl);
-          setStatus('✅ 提取成功，正在加载预览...', '');
         } catch (err) {
           inputWrapper.classList.add('error');
           setStatus('❌ ' + err.message, 'error');
@@ -1234,37 +1259,30 @@
         if (!currentVideoUrl) return;
 
         showToast('正在下载视频...');
-        try {
-          let blob = await fetchVideoAsBlob(currentVideoUrl);
-          if (!blob) {
-            blob = await fetch(currentVideoUrl).then(r => r.blob()).catch(() => null);
-          }
-          if (!blob) {
-            window.open(currentVideoUrl, '_blank');
-            showToast('直链下载失败，已在新窗口打开，请长按保存');
-            return;
-          }
+        let blob = null;
 
+        try {
+          blob = await fetchVideoAsBlob(currentVideoUrl);
+        } catch {}
+
+        if (blob && blob.size > 1000) {
           const blobUrl = URL.createObjectURL(blob);
           const a = document.createElement('a');
           a.href = blobUrl;
-
           const ext = currentVideoUrl.match(/\.(mp4|mov|webm)($|\?)/i);
           const fileExt = ext ? ext[1] : 'mp4';
           const cfg = PLATFORM_CONFIG[currentPlatform] || { name: 'Video' };
           a.download = `${cfg.name}_video_${Date.now()}.${fileExt}`;
-
           document.body.appendChild(a);
           a.click();
           document.body.removeChild(a);
-
-          setTimeout(() => URL.revokeObjectURL(blobUrl), 3000);
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
           showToast('✅ 下载成功！');
-        } catch (err) {
-          console.error('Download error:', err);
-          window.open(currentVideoUrl, '_blank');
-          showToast('已在新窗口打开视频，请长按保存');
+          return;
         }
+
+        window.open(currentVideoUrl, '_blank');
+        showToast('已在新窗口打开视频，请长按屏幕保存');
       }
 
       async function copyVideoUrl() {
