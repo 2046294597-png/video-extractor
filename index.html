@@ -712,6 +712,10 @@
         </div>
         <div class="tips-item">
           <span class="dot">•</span>
+          <span>私密频道（<code>t.me/c/...</code>）需先在浏览器登录 <code>web.telegram.org</code></span>
+        </div>
+        <div class="tips-item">
+          <span class="dot">•</span>
           <span>直接粘贴链接后点击「提取视频」即可</span>
         </div>
       </div>
@@ -1302,6 +1306,11 @@ video::-webkit-media-controls{display:flex!important}
           showResult(httpsUrl, platform, url);
           saveHistory(url, platform, httpsUrl);
         } catch (err) {
+          if (platform === 'telegram' && /t\.me\/c\/\d+/.test(url)) {
+            setStatus('', '');
+            showPrivateChannelView(url);
+            return;
+          }
           inputWrapper.classList.add('error');
           setStatus('❌ ' + err.message, 'error');
           showToast('提取失败: ' + err.message);
@@ -1311,8 +1320,40 @@ video::-webkit-media-controls{display:flex!important}
         }
       }
 
+      function showPrivateChannelView(url) {
+        const cleanUrl = url.replace(/\?.*$/, '').replace(/\/$/, '');
+        const embedUrl = cleanUrl + '?embed=1';
+
+        currentVideoUrl = embedUrl;
+        currentPlatform = 'telegram';
+        currentSourceUrl = url;
+
+        const cfg = PLATFORM_CONFIG.telegram;
+        platformTag.textContent = cfg.tagLabel;
+        platformTag.className = `platform-tag ${cfg.tagClass}`;
+        resultTitle.textContent = url;
+
+        videoContainer.innerHTML = `
+          <iframe src="${embedUrl}"
+            style="width:100%;min-height:360px;border:none;background:#0f0f0f"
+            referrerpolicy="no-referrer"
+            loading="lazy"></iframe>`;
+
+        resultCard.classList.add('visible');
+        resultCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        saveHistory(url, 'telegram', embedUrl);
+        setStatus('🔒 私密频道 — 需登录 Telegram Web 后观看；点击下方按钮下载', '');
+        showToast('私密频道：请在浏览器登录 web.telegram.org 后刷新');
+      }
+
       async function downloadVideo() {
         if (!currentVideoUrl) return;
+
+        if (/t\.me/.test(currentVideoUrl)) {
+          window.open(currentVideoUrl, '_blank');
+          showToast('已在新窗口打开，在视频上长按即可保存');
+          return;
+        }
 
         showToast('正在下载视频...');
         let blob = null;
