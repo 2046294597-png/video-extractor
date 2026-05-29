@@ -1,0 +1,1282 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#6366f1">
+  <meta name="apple-mobile-web-app-title" content="视频提取器">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect width='512' height='512' rx='100' fill='%230f0f0f'/><rect width='512' height='512' rx='100' fill='url(%23g)'/><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0%25' stop-color='%236366f1'/><stop offset='100%25' stop-color='%237c3aed'/></linearGradient></defs><text x='256' y='200' text-anchor='middle' font-size='140'>🎬</text><text x='256' y='380' text-anchor='middle' font-size='72' fill='white' font-weight='bold'>提取</text></svg>">
+  <title>视频提取器 - Telegram & Twitter</title>
+  <style>
+    :root {
+      --bg: #0f0f0f;
+      --surface: #1a1a2e;
+      --surface2: #16213e;
+      --primary: #6366f1;
+      --primary-glow: rgba(99, 102, 241, 0.3);
+      --accent-tg: #2ea6ff;
+      --accent-tw: #1d9bf0;
+      --text: #e2e8f0;
+      --text-secondary: #94a3b8;
+      --border: #2d2d4a;
+      --danger: #ef4444;
+      --success: #22c55e;
+      --radius: 16px;
+      --radius-sm: 10px;
+      --safe-bottom: env(safe-area-inset-bottom, 20px);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html, body {
+      height: 100%;
+      overflow-x: hidden;
+      -webkit-tap-highlight-color: transparent;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+      min-height: -webkit-fill-available;
+    }
+
+    .app-container {
+      width: 100%;
+      max-width: 480px;
+      padding: 20px 16px;
+      padding-bottom: calc(40px + var(--safe-bottom));
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .header {
+      text-align: center;
+      padding-top: 12px;
+    }
+
+    .header .logo {
+      font-size: 36px;
+      margin-bottom: 4px;
+      animation: float 3s ease-in-out infinite;
+    }
+
+    @keyframes float {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-6px); }
+    }
+
+    .header h1 {
+      font-size: 24px;
+      font-weight: 700;
+      background: linear-gradient(135deg, var(--primary), #a78bfa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .header .subtitle {
+      font-size: 13px;
+      color: var(--text-secondary);
+      margin-top: 4px;
+    }
+
+    .platform-badges {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+      margin-top: 8px;
+    }
+
+    .platform-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 600;
+      transition: all 0.3s;
+    }
+
+    .badge-tg {
+      background: rgba(46, 166, 255, 0.12);
+      color: var(--accent-tg);
+      border: 1px solid rgba(46, 166, 255, 0.2);
+    }
+
+    .badge-tw {
+      background: rgba(29, 155, 240, 0.12);
+      color: var(--accent-tw);
+      border: 1px solid rgba(29, 155, 240, 0.2);
+    }
+
+    .input-section {
+      position: relative;
+    }
+
+    .input-wrapper {
+      position: relative;
+      background: var(--surface);
+      border: 2px solid var(--border);
+      border-radius: var(--radius);
+      transition: all 0.3s;
+      overflow: hidden;
+    }
+
+    .input-wrapper:focus-within {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 4px var(--primary-glow);
+    }
+
+    .input-wrapper.detected-tg {
+      border-color: var(--accent-tg);
+      box-shadow: 0 0 0 4px rgba(46, 166, 255, 0.15);
+    }
+
+    .input-wrapper.detected-tw {
+      border-color: var(--accent-tw);
+      box-shadow: 0 0 0 4px rgba(29, 155, 240, 0.15);
+    }
+
+    .input-wrapper.error {
+      border-color: var(--danger);
+      box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.15);
+    }
+
+    .input-icon {
+      position: absolute;
+      left: 16px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 20px;
+      z-index: 2;
+      pointer-events: none;
+      transition: all 0.3s;
+    }
+
+    .url-input {
+      width: 100%;
+      padding: 16px 52px 16px 48px;
+      background: transparent;
+      border: none;
+      outline: none;
+      color: var(--text);
+      font-size: 15px;
+      line-height: 1.5;
+      font-family: inherit;
+    }
+
+    .url-input::placeholder {
+      color: var(--text-secondary);
+      opacity: 0.6;
+    }
+
+    .paste-btn {
+      position: absolute;
+      right: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 13px;
+      cursor: pointer;
+      z-index: 2;
+      transition: all 0.2s;
+      font-family: inherit;
+      white-space: nowrap;
+    }
+
+    .paste-btn:active {
+      background: var(--primary);
+      color: #fff;
+      border-color: var(--primary);
+      transform: translateY(-50%) scale(0.95);
+    }
+
+    .clear-btn {
+      position: absolute;
+      right: 80px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      color: var(--text-secondary);
+      font-size: 18px;
+      cursor: pointer;
+      z-index: 2;
+      width: 28px;
+      height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      transition: all 0.2s;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .clear-btn.visible {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .clear-btn:active {
+      background: rgba(255,255,255,0.1);
+    }
+
+    .extract-btn {
+      width: 100%;
+      padding: 16px;
+      background: linear-gradient(135deg, var(--primary), #7c3aed);
+      color: #fff;
+      border: none;
+      border-radius: var(--radius);
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.3s;
+      font-family: inherit;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .extract-btn:active {
+      transform: scale(0.97);
+      opacity: 0.9;
+    }
+
+    .extract-btn:disabled {
+      opacity: 0.4;
+      pointer-events: none;
+    }
+
+    .extract-btn .btn-content {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .extract-btn.loading .btn-text { display: none; }
+    .extract-btn.loading .btn-spinner { display: block; }
+    .btn-spinner { display: none; }
+
+    .spinner {
+      width: 20px;
+      height: 20px;
+      border: 2.5px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .status-msg {
+      text-align: center;
+      font-size: 13px;
+      color: var(--text-secondary);
+      min-height: 20px;
+      transition: all 0.3s;
+    }
+
+    .status-msg.error { color: var(--danger); }
+    .status-msg.success { color: var(--success); }
+
+    .result-card {
+      background: var(--surface);
+      border-radius: var(--radius);
+      overflow: hidden;
+      border: 1px solid var(--border);
+      animation: slideUp 0.4s ease-out;
+      display: none;
+    }
+
+    .result-card.visible {
+      display: block;
+    }
+
+    @keyframes slideUp {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .result-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .platform-tag {
+      padding: 4px 10px;
+      border-radius: 14px;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .platform-tag.tg { background: rgba(46,166,255,0.15); color: var(--accent-tg); }
+    .platform-tag.tw { background: rgba(29,155,240,0.15); color: var(--accent-tw); }
+
+    .result-title {
+      flex: 1;
+      font-size: 13px;
+      color: var(--text-secondary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .video-container {
+      position: relative;
+      width: 100%;
+      background: #000;
+    }
+
+    .video-container video {
+      width: 100%;
+      display: block;
+      max-height: 400px;
+      object-fit: contain;
+    }
+
+    .video-placeholder {
+      width: 100%;
+      aspect-ratio: 16/9;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(135deg, #1a1a2e, #16213e);
+      font-size: 48px;
+    }
+
+    .result-actions {
+      display: flex;
+      gap: 10px;
+      padding: 14px 16px;
+    }
+
+    .download-btn {
+      flex: 1;
+      padding: 12px;
+      border-radius: var(--radius-sm);
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      transition: all 0.3s;
+      font-family: inherit;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .download-btn:active {
+      transform: scale(0.95);
+    }
+
+    .btn-download {
+      background: linear-gradient(135deg, var(--primary), #7c3aed);
+      color: #fff;
+    }
+
+    .btn-copy {
+      background: var(--surface2);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    .btn-share {
+      background: var(--surface2);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    .history-section {
+      margin-top: 4px;
+    }
+
+    .history-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+
+    .history-title {
+      font-size: 16px;
+      font-weight: 700;
+    }
+
+    .history-clear {
+      background: none;
+      border: none;
+      color: var(--text-secondary);
+      font-size: 13px;
+      cursor: pointer;
+      font-family: inherit;
+      padding: 4px 8px;
+    }
+
+    .history-empty {
+      text-align: center;
+      color: var(--text-secondary);
+      font-size: 14px;
+      padding: 32px 0;
+    }
+
+    .history-empty .empty-icon {
+      font-size: 40px;
+      display: block;
+      margin-bottom: 8px;
+      opacity: 0.5;
+    }
+
+    .history-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .history-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 12px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .history-item:active {
+      background: var(--surface2);
+      transform: scale(0.98);
+    }
+
+    .history-platform {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      flex-shrink: 0;
+    }
+
+    .history-platform.tg { background: rgba(46,166,255,0.15); }
+    .history-platform.tw { background: rgba(29,155,240,0.15); }
+
+    .history-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .history-url {
+      font-size: 13px;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .history-time {
+      font-size: 11px;
+      color: var(--text-secondary);
+      margin-top: 2px;
+    }
+
+    .history-arrow {
+      color: var(--text-secondary);
+      font-size: 16px;
+      flex-shrink: 0;
+    }
+
+    .toast {
+      position: fixed;
+      bottom: 100px;
+      left: 50%;
+      transform: translateX(-50%) translateY(100px);
+      background: var(--surface2);
+      color: var(--text);
+      padding: 12px 24px;
+      border-radius: 25px;
+      font-size: 14px;
+      font-weight: 600;
+      border: 1px solid var(--border);
+      z-index: 100;
+      opacity: 0;
+      transition: all 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+      pointer-events: none;
+      white-space: nowrap;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    .tips-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 14px 16px;
+    }
+
+    .tips-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+    }
+
+    .tips-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .tips-item {
+      font-size: 12px;
+      color: var(--text-secondary);
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      line-height: 1.5;
+    }
+
+    .tips-item .dot {
+      color: var(--primary);
+      flex-shrink: 0;
+    }
+
+    .install-banner {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      padding: 14px 16px;
+      padding-bottom: calc(14px + var(--safe-bottom));
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      z-index: 50;
+      transform: translateY(100%);
+      transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+      box-shadow: 0 -4px 20px rgba(0,0,0,0.4);
+    }
+
+    .install-banner.show {
+      transform: translateY(0);
+    }
+
+    .install-banner .banner-icon {
+      font-size: 32px;
+      flex-shrink: 0;
+    }
+
+    .install-banner .banner-text {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .install-banner .banner-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .install-banner .banner-desc {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-top: 2px;
+    }
+
+    .install-btn {
+      background: linear-gradient(135deg, var(--primary), #7c3aed);
+      color: #fff;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 20px;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      flex-shrink: 0;
+      font-family: inherit;
+    }
+
+    .install-dismiss {
+      background: none;
+      border: none;
+      color: var(--text-secondary);
+      font-size: 18px;
+      cursor: pointer;
+      flex-shrink: 0;
+      padding: 4px;
+      margin-left: -4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="app-container">
+    <header class="header">
+      <div class="logo">🎬</div>
+      <h1>视频提取器</h1>
+      <p class="subtitle">支持 Telegram · Twitter / X 视频下载</p>
+      <div class="platform-badges">
+        <span class="platform-badge badge-tg">✈️ Telegram</span>
+        <span class="platform-badge badge-tw">𝕏 Twitter</span>
+      </div>
+    </header>
+
+    <div class="input-section">
+      <div class="input-wrapper" id="inputWrapper">
+        <span class="input-icon" id="inputIcon">🔗</span>
+        <input
+          type="url"
+          class="url-input"
+          id="urlInput"
+          placeholder="粘贴 Telegram 或 Twitter 视频链接..."
+          autocomplete="off"
+          autocorrect="off"
+          autocapitalize="off"
+          spellcheck="false"
+        >
+        <button class="clear-btn" id="clearBtn" aria-label="清除">✕</button>
+        <button class="paste-btn" id="pasteBtn">📋 粘贴</button>
+      </div>
+    </div>
+
+    <button class="extract-btn" id="extractBtn" disabled>
+      <span class="btn-content">
+        <span class="btn-text">🎯 提取视频</span>
+        <span class="btn-spinner"><span class="spinner"></span></span>
+      </span>
+    </button>
+
+    <p class="status-msg" id="statusMsg"></p>
+
+    <div class="result-card" id="resultCard">
+      <div class="result-header">
+        <span class="platform-tag" id="platformTag">TG</span>
+        <span class="result-title" id="resultTitle"></span>
+      </div>
+      <div class="video-container" id="videoContainer">
+        <div class="video-placeholder">🎥</div>
+      </div>
+      <div class="result-actions">
+        <button class="download-btn btn-download" id="downloadBtn">
+          ⬇️ 下载视频
+        </button>
+        <button class="download-btn btn-copy" id="copyBtn">
+          📋 复制链接
+        </button>
+        <button class="download-btn btn-share" id="shareBtn">
+          📤 分享
+        </button>
+      </div>
+    </div>
+
+    <div class="tips-card">
+      <div class="tips-title">💡 使用提示</div>
+      <div class="tips-list">
+        <div class="tips-item">
+          <span class="dot">•</span>
+          <span>Twitter 链接支持 <code>twitter.com</code> / <code>x.com</code> / <code>fxtwitter.com</code></span>
+        </div>
+        <div class="tips-item">
+          <span class="dot">•</span>
+          <span>Telegram 链接支持 <code>t.me</code> 公开频道的视频帖子</span>
+        </div>
+        <div class="tips-item">
+          <span class="dot">•</span>
+          <span>直接粘贴链接后点击「提取视频」即可</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="history-section" id="historySection">
+      <div class="history-header">
+        <span class="history-title">📜 历史记录</span>
+        <button class="history-clear" id="historyClearBtn">清空</button>
+      </div>
+      <div class="history-list" id="historyList">
+        <div class="history-empty">
+          <span class="empty-icon">📭</span>
+          <span>暂无记录</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <div class="install-banner" id="installBanner">
+    <span class="banner-icon">🎬</span>
+    <div class="banner-text">
+      <div class="banner-title">添加到主屏幕</div>
+      <div class="banner-desc">像 App 一样使用，更快捷方便</div>
+    </div>
+    <button class="install-btn" id="installBtn">安装</button>
+    <button class="install-dismiss" id="installDismiss">✕</button>
+  </div>
+
+  <script>
+    (function() {
+      const urlInput = document.getElementById('urlInput');
+      const inputWrapper = document.getElementById('inputWrapper');
+      const inputIcon = document.getElementById('inputIcon');
+      const extractBtn = document.getElementById('extractBtn');
+      const clearBtn = document.getElementById('clearBtn');
+      const pasteBtn = document.getElementById('pasteBtn');
+      const statusMsg = document.getElementById('statusMsg');
+      const resultCard = document.getElementById('resultCard');
+      const platformTag = document.getElementById('platformTag');
+      const resultTitle = document.getElementById('resultTitle');
+      const videoContainer = document.getElementById('videoContainer');
+      const downloadBtn = document.getElementById('downloadBtn');
+      const copyBtn = document.getElementById('copyBtn');
+      const shareBtn = document.getElementById('shareBtn');
+      const historyList = document.getElementById('historyList');
+      const historyClearBtn = document.getElementById('historyClearBtn');
+      const toast = document.getElementById('toast');
+
+      let currentVideoUrl = null;
+      let currentPlatform = null;
+      let currentSourceUrl = null;
+      let toastTimer = null;
+
+      const PLATFORM_CONFIG = {
+        telegram: {
+          name: 'Telegram',
+          icon: '✈️',
+          tagClass: 'tg',
+          tagLabel: 'TG',
+          color: '#2ea6ff',
+          domains: ['t.me'],
+          patterns: [/^https?:\/\/(www\.)?t\.me\/[^\/]+\/\d+/i]
+        },
+        twitter: {
+          name: 'Twitter/X',
+          icon: '𝕏',
+          tagClass: 'tw',
+          tagLabel: 'TW',
+          color: '#1d9bf0',
+          domains: ['twitter.com', 'x.com', 'fxtwitter.com', 'vxtwitter.com', 'fixupx.com'],
+          patterns: [
+            /^https?:\/\/(www\.)?(twitter\.com|x\.com)\/\w+\/status\/\d+/i,
+            /^https?:\/\/(www\.)?(fxtwitter\.com|vxtwitter\.com|fixupx\.com)\/\w+\/status\/\d+/i,
+            /^https?:\/\/(www\.)?(twitter\.com|x\.com)\/i\/status\/\d+/i
+          ]
+        }
+      };
+
+      function detectPlatform(url) {
+        if (!url) return null;
+        for (const [key, config] of Object.entries(PLATFORM_CONFIG)) {
+          for (const pattern of config.patterns) {
+            if (pattern.test(url)) return key;
+          }
+        }
+        for (const [key, config] of Object.entries(PLATFORM_CONFIG)) {
+          const lower = url.toLowerCase();
+          for (const domain of config.domains) {
+            if (lower.includes(domain)) return key;
+          }
+        }
+        return null;
+      }
+
+      function updateInputUI(platform) {
+        inputWrapper.classList.remove('detected-tg', 'detected-tw', 'error');
+        if (platform === 'telegram') {
+          inputWrapper.classList.add('detected-tg');
+          inputIcon.textContent = '✈️';
+          extractBtn.disabled = false;
+          setStatus('检测到 Telegram 链接 ✅', 'success');
+        } else if (platform === 'twitter') {
+          inputWrapper.classList.add('detected-tw');
+          inputIcon.textContent = '𝕏';
+          extractBtn.disabled = false;
+          setStatus('检测到 Twitter/X 链接 ✅', 'success');
+        } else {
+          inputIcon.textContent = '🔗';
+          extractBtn.disabled = true;
+          setStatus('');
+        }
+      }
+
+      function setStatus(msg, type) {
+        statusMsg.textContent = msg || '';
+        statusMsg.className = 'status-msg';
+        if (type) statusMsg.classList.add(type);
+      }
+
+      function showToast(msg) {
+        if (toastTimer) clearTimeout(toastTimer);
+        toast.textContent = msg;
+        toast.classList.add('show');
+        toastTimer = setTimeout(() => {
+          toast.classList.remove('show');
+        }, 2000);
+      }
+
+      function formatTime() {
+        const now = new Date();
+        const pad = n => String(n).padStart(2, '0');
+        return `${pad(now.getHours())}:${pad(now.getMinutes())} ${pad(now.getMonth()+1)}/${pad(now.getDate())}`;
+      }
+
+      function getHistory() {
+        try {
+          return JSON.parse(localStorage.getItem('video_extractor_history') || '[]');
+        } catch { return []; }
+      }
+
+      function saveHistory(url, platform, videoUrl) {
+        const history = getHistory();
+        const existing = history.findIndex(h => h.url === url);
+        if (existing >= 0) history.splice(existing, 1);
+        history.unshift({
+          url,
+          platform,
+          videoUrl,
+          time: formatTime(),
+          timestamp: Date.now()
+        });
+        if (history.length > 20) history.length = 20;
+        localStorage.setItem('video_extractor_history', JSON.stringify(history));
+        renderHistory();
+      }
+
+      function deleteHistory(url) {
+        let history = getHistory();
+        history = history.filter(h => h.url !== url);
+        localStorage.setItem('video_extractor_history', JSON.stringify(history));
+        renderHistory();
+      }
+
+      function clearAllHistory() {
+        localStorage.removeItem('video_extractor_history');
+        renderHistory();
+        showToast('历史记录已清空');
+      }
+
+      function renderHistory() {
+        const history = getHistory();
+        if (history.length === 0) {
+          historyList.innerHTML = '<div class="history-empty"><span class="empty-icon">📭</span><span>暂无记录</span></div>';
+          return;
+        }
+        historyList.innerHTML = history.map((h, i) => {
+          const cfg = PLATFORM_CONFIG[h.platform];
+          return `
+            <div class="history-item" data-index="${i}">
+              <div class="history-platform ${cfg.tagClass}">${cfg.icon}</div>
+              <div class="history-info">
+                <div class="history-url">${escapeHtml(h.url)}</div>
+                <div class="history-time">${h.time}</div>
+              </div>
+              <span class="history-arrow">›</span>
+            </div>
+          `;
+        }).join('');
+
+        historyList.querySelectorAll('.history-item').forEach(item => {
+          item.addEventListener('click', () => {
+            const idx = parseInt(item.dataset.index);
+            const h = getHistory()[idx];
+            if (h) {
+              urlInput.value = h.url;
+              const platform = detectPlatform(h.url);
+              updateInputUI(platform);
+              if (h.videoUrl) {
+                showResult(h.videoUrl, h.platform, h.url);
+              } else {
+                extractVideo();
+              }
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }
+          });
+        });
+      }
+
+      function escapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+      }
+
+      function showResult(videoUrl, platform, sourceUrl) {
+        currentVideoUrl = videoUrl;
+        currentPlatform = platform;
+        currentSourceUrl = sourceUrl;
+
+        const cfg = PLATFORM_CONFIG[platform];
+        platformTag.textContent = cfg.tagLabel;
+        platformTag.className = `platform-tag ${cfg.tagClass}`;
+        resultTitle.textContent = sourceUrl;
+
+        videoContainer.innerHTML = `
+          <video controls playsinline preload="metadata" poster="">
+            <source src="${videoUrl}" type="video/mp4">
+            您的浏览器不支持视频播放
+          </video>
+        `;
+
+        resultCard.classList.add('visible');
+        resultCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+
+      async function extractTelegramVideo(url) {
+        const corsProxy = 'https://api.allorigins.win/raw?url=';
+        const targetUrl = corsProxy + encodeURIComponent(url + '?embed=1&mode=tme');
+
+        const response = await fetch(targetUrl, {
+          headers: { 'Accept': 'text/html' }
+        });
+
+        if (!response.ok) throw new Error('无法访问 Telegram 链接');
+
+        const html = await response.text();
+
+        const videoMatch = html.match(/<video[^>]*src=["']([^"']+)["'][^>]*>/i)
+          || html.match(/src=["']([^"']*\.mp4[^"']*)["']/i)
+          || html.match(/source\s+src=["']([^"']*\.mp4[^"']*)["']/i);
+
+        let videoUrl = null;
+        if (videoMatch) {
+          videoUrl = videoMatch[1];
+          if (videoUrl.startsWith('/')) {
+            videoUrl = 'https://t.me' + videoUrl;
+          }
+        }
+
+        if (!videoUrl) {
+          const metaMatch = html.match(/<meta\s+property=["']og:video["']\s+content=["']([^"']+)["']/i)
+            || html.match(/<meta\s+property=["']og:video:url["']\s+content=["']([^"']+)["']/i)
+            || html.match(/<meta\s+property=["']twitter:player:stream["']\s+content=["']([^"']+)["']/i);
+          if (metaMatch) {
+            videoUrl = metaMatch[1];
+          }
+        }
+
+        if (!videoUrl) {
+          const jsonMatch = html.match(/"video":\s*\{[^}]*"src":\s*"([^"]+)"/);
+          if (jsonMatch) {
+            videoUrl = jsonMatch[1].replace(/\\\//g, '/');
+          }
+        }
+
+        if (!videoUrl) {
+          throw new Error('未找到视频。请确认：\n1. 链接是公开频道的视频帖子\n2. 频道未设置私密');
+        }
+
+        return videoUrl;
+      }
+
+      async function extractTwitterVideo(url) {
+        const tweetMatch = url.match(/(?:twitter\.com|x\.com|fxtwitter\.com|vxtwitter\.com|fixupx\.com)\/\w+\/status\/(\d+)/i);
+        if (!tweetMatch) {
+          throw new Error('无效的 Twitter 链接格式');
+        }
+
+        const tweetId = tweetMatch[1];
+        const apiUrl = `https://api.fxtwitter.com/status/${tweetId}`;
+
+        const response = await fetch(apiUrl);
+        if (!response.ok) {
+          throw new Error('无法获取推文信息 (状态码: ' + response.status + ')');
+        }
+
+        const data = await response.json();
+
+        if (data.code === 404 || !data.tweet) {
+          throw new Error('推文不存在或已被删除');
+        }
+
+        const tweet = data.tweet;
+        const media = tweet.media;
+
+        if (!media || !media.all || media.all.length === 0) {
+          throw new Error('该推文没有包含视频。请确认链接对应的是视频推文');
+        }
+
+        const videos = media.all.filter(m => m.type === 'video' || m.type === 'gif');
+        if (videos.length === 0) {
+          throw new Error('该推文没有视频内容（可能只有图片）');
+        }
+
+        const video = videos[0];
+        let bestUrl = video.url;
+
+        if (video.variants && video.variants.length > 0) {
+          const mp4Variants = video.variants
+            .filter(v => v.type === 'video/mp4' || (v.url && v.url.includes('.mp4')))
+            .sort((a, b) => {
+              const bitrateA = parseInt(a.bitrate) || 0;
+              const bitrateB = parseInt(b.bitrate) || 0;
+              return bitrateB - bitrateA;
+            });
+
+          if (mp4Variants.length > 0) {
+            bestUrl = mp4Variants[0].url;
+          } else {
+            bestUrl = video.variants[video.variants.length - 1].url;
+          }
+        }
+
+        if (!bestUrl) {
+          throw new Error('无法获取视频下载地址');
+        }
+
+        const cleanUrl = bestUrl.split('?')[0];
+        const isDirectUrl = /\.(mp4|mov|webm)($|\?)/i.test(bestUrl);
+
+        return isDirectUrl ? bestUrl : cleanUrl;
+      }
+
+      async function extractVideo() {
+        const url = urlInput.value.trim();
+        if (!url) {
+          showToast('请先粘贴视频链接');
+          return;
+        }
+
+        const platform = detectPlatform(url);
+        if (!platform) {
+          inputWrapper.classList.add('error');
+          setStatus('❌ 不支持的链接格式，请粘贴 Telegram 或 Twitter 视频链接', 'error');
+          return;
+        }
+
+        extractBtn.classList.add('loading');
+        extractBtn.disabled = true;
+        setStatus('正在解析视频...', '');
+
+        try {
+          let videoUrl;
+          if (platform === 'telegram') {
+            videoUrl = await extractTelegramVideo(url);
+          } else if (platform === 'twitter') {
+            videoUrl = await extractTwitterVideo(url);
+          } else {
+            throw new Error('不支持的平台');
+          }
+
+          const httpsUrl = videoUrl.replace(/^http:\/\//i, 'https://');
+          showResult(httpsUrl, platform, url);
+          saveHistory(url, platform, httpsUrl);
+          setStatus('✅ 视频提取成功！', 'success');
+        } catch (err) {
+          inputWrapper.classList.add('error');
+          setStatus('❌ ' + err.message, 'error');
+          showToast('提取失败: ' + err.message);
+        } finally {
+          extractBtn.classList.remove('loading');
+          extractBtn.disabled = false;
+        }
+      }
+
+      async function downloadVideo() {
+        if (!currentVideoUrl) return;
+
+        try {
+          showToast('正在准备下载...');
+
+          const response = await fetch(currentVideoUrl);
+          if (!response.ok) throw new Error('下载失败');
+
+          const blob = await response.blob();
+          const blobUrl = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = blobUrl;
+
+          const ext = currentVideoUrl.match(/\.(mp4|mov|webm)($|\?)/i);
+          const fileExt = ext ? ext[1] : 'mp4';
+          const cfg = PLATFORM_CONFIG[currentPlatform];
+          a.download = `${cfg.name}_video_${Date.now()}.${fileExt}`;
+
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+          showToast('✅ 下载成功！');
+        } catch (err) {
+          console.error('Download error:', err);
+          window.open(currentVideoUrl, '_blank');
+          showToast('已在新窗口打开视频，请长按保存');
+        }
+      }
+
+      async function copyVideoUrl() {
+        if (!currentVideoUrl) return;
+        try {
+          await navigator.clipboard.writeText(currentVideoUrl);
+          showToast('✅ 链接已复制到剪贴板');
+        } catch {
+          const ta = document.createElement('textarea');
+          ta.value = currentVideoUrl;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+          showToast('✅ 链接已复制到剪贴板');
+        }
+      }
+
+      async function shareVideo() {
+        if (!currentVideoUrl) return;
+        if (navigator.share) {
+          try {
+            await navigator.share({
+              title: '视频链接',
+              text: currentSourceUrl,
+              url: currentVideoUrl
+            });
+          } catch {}
+        } else {
+          copyVideoUrl();
+        }
+      }
+
+      urlInput.addEventListener('input', () => {
+        const url = urlInput.value.trim();
+        clearBtn.classList.toggle('visible', url.length > 0);
+
+        if (url.length === 0) {
+          inputWrapper.classList.remove('detected-tg', 'detected-tw', 'error');
+          inputIcon.textContent = '🔗';
+          extractBtn.disabled = true;
+          setStatus('');
+          return;
+        }
+
+        const platform = detectPlatform(url);
+        updateInputUI(platform);
+        if (!platform && url.length > 5) {
+          setStatus('⚠️ 无法识别链接类型，请检查链接格式', '');
+        }
+      });
+
+      urlInput.addEventListener('paste', () => {
+        setTimeout(() => {
+          const url = urlInput.value.trim();
+          clearBtn.classList.toggle('visible', url.length > 0);
+          const platform = detectPlatform(url);
+          updateInputUI(platform);
+        }, 100);
+      });
+
+      clearBtn.addEventListener('click', () => {
+        urlInput.value = '';
+        urlInput.focus();
+        inputWrapper.classList.remove('detected-tg', 'detected-tw', 'error');
+        inputIcon.textContent = '🔗';
+        extractBtn.disabled = true;
+        setStatus('');
+        clearBtn.classList.remove('visible');
+      });
+
+      pasteBtn.addEventListener('click', async () => {
+        try {
+          const text = await navigator.clipboard.readText();
+          if (text) {
+            urlInput.value = text.trim();
+            const platform = detectPlatform(urlInput.value.trim());
+            updateInputUI(platform);
+            clearBtn.classList.add('visible');
+            urlInput.dispatchEvent(new Event('input'));
+          }
+        } catch {
+          urlInput.focus();
+          showToast('请手动粘贴链接');
+        }
+      });
+
+      extractBtn.addEventListener('click', extractVideo);
+      downloadBtn.addEventListener('click', downloadVideo);
+      copyBtn.addEventListener('click', copyVideoUrl);
+      shareBtn.addEventListener('click', shareVideo);
+      historyClearBtn.addEventListener('click', clearAllHistory);
+
+      const installBanner = document.getElementById('installBanner');
+      const installBtn = document.getElementById('installBtn');
+      const installDismiss = document.getElementById('installDismiss');
+      let deferredPrompt = null;
+
+      function showInstallBanner() {
+        const dismissed = localStorage.getItem('pwa_install_dismissed');
+        if (dismissed) return;
+        if (window.matchMedia('(display-mode: standalone)').matches) return;
+        installBanner.classList.add('show');
+      }
+
+      function hideInstallBanner() {
+        installBanner.classList.remove('show');
+      }
+
+      window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();
+        deferredPrompt = e;
+        showInstallBanner();
+      });
+
+      installBtn.addEventListener('click', async () => {
+        if (deferredPrompt) {
+          deferredPrompt.prompt();
+          const result = await deferredPrompt.userChoice;
+          deferredPrompt = null;
+          hideInstallBanner();
+        } else {
+          showToast('请使用浏览器菜单中的「添加到主屏幕」');
+        }
+      });
+
+      installDismiss.addEventListener('click', () => {
+        hideInstallBanner();
+        localStorage.setItem('pwa_install_dismissed', '1');
+      });
+
+      window.addEventListener('appinstalled', () => {
+        hideInstallBanner();
+        deferredPrompt = null;
+        showToast('✅ 安装成功！可在桌面找到应用');
+      });
+
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/sw.js').then(() => {
+          setTimeout(showInstallBanner, 2000);
+        }).catch(() => {});
+      }
+
+      renderHistory();
+    })();
+  </script>
+</body>
+</html>
