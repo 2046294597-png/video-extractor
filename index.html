@@ -1445,6 +1445,11 @@ video::-webkit-media-controls{display:flex!important}
 
         if (currentIsPrivateChannel) {
           const rawUrl = currentSourceUrl.replace(/\/$/, '');
+          if (isMobileDevice()) {
+            try { await navigator.clipboard.writeText(rawUrl); } catch { /* fallback */ }
+            showToast('✅ 已复制！请粘贴到浏览器地址栏打开');
+            return;
+          }
           window.open(rawUrl, '_blank');
           showToast('已在新标签页打开，长按视频即可保存');
           return;
