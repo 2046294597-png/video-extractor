@@ -764,6 +764,7 @@
       const toast = document.getElementById('toast');
 
       let currentVideoUrl = null;
+      let currentBlobUrl = null;
       let currentPlatform = null;
       let currentSourceUrl = null;
       let toastTimer = null;
@@ -940,14 +941,59 @@
         resultTitle.textContent = sourceUrl;
 
         videoContainer.innerHTML = `
-          <video controls playsinline preload="metadata" poster="">
-            <source src="${videoUrl}" type="video/mp4">
-            您的浏览器不支持视频播放
-          </video>
+          <div class="video-placeholder">
+            <span style="display:flex;flex-direction:column;align-items:center;gap:8px;">
+              <span class="spinner" style="width:32px;height:32px;border-color:rgba(99,102,241,0.3);border-top-color:#6366f1;"></span>
+              <span style="font-size:13px;color:#94a3b8;">正在加载视频...</span>
+            </span>
+          </div>
         `;
 
         resultCard.classList.add('visible');
         resultCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+        loadVideoBlob(videoUrl, platform);
+      }
+
+      async function fetchVideoAsBlob(videoUrl) {
+        const proxyFns = [
+          (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+          (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+        ];
+
+        for (const fn of proxyFns) {
+          try {
+            const resp = await fetch(fn(videoUrl));
+            if (!resp.ok) continue;
+            const blob = await resp.blob();
+            if (blob.size > 0) return blob;
+          } catch { continue; }
+        }
+
+        return null;
+      }
+
+      async function loadVideoBlob(videoUrl, platform) {
+        const blob = await fetchVideoAsBlob(videoUrl);
+        if (blob) {
+          const blobUrl = URL.createObjectURL(blob);
+          currentBlobUrl = blobUrl;
+          videoContainer.innerHTML = `
+            <video controls playsinline preload="auto" src="${blobUrl}" type="video/mp4">
+              您的浏览器不支持视频播放
+            </video>
+          `;
+        } else {
+          videoContainer.innerHTML = `
+            <div class="video-placeholder">
+              <span style="display:flex;flex-direction:column;align-items:center;gap:8px;">
+                <span style="font-size:20px;">⚠️</span>
+                <span style="font-size:14px;color:#ef4444;">视频加载失败 - 已被防盗链拦截</span>
+                <span style="font-size:12px;color:#94a3b8;">请点击「下载视频」或「复制链接」后自行保存</span>
+              </span>
+            </div>
+          `;
+        }
       }
 
       async function extractTelegramVideo(url) {
@@ -1173,7 +1219,7 @@
           const httpsUrl = videoUrl.replace(/^http:\/\//i, 'https://');
           showResult(httpsUrl, platform, url);
           saveHistory(url, platform, httpsUrl);
-          setStatus('✅ 视频提取成功！', 'success');
+          setStatus('✅ 提取成功，正在加载预览...', '');
         } catch (err) {
           inputWrapper.classList.add('error');
           setStatus('❌ ' + err.message, 'error');
@@ -1187,27 +1233,32 @@
       async function downloadVideo() {
         if (!currentVideoUrl) return;
 
+        showToast('正在下载视频...');
         try {
-          showToast('正在准备下载...');
+          let blob = await fetchVideoAsBlob(currentVideoUrl);
+          if (!blob) {
+            blob = await fetch(currentVideoUrl).then(r => r.blob()).catch(() => null);
+          }
+          if (!blob) {
+            window.open(currentVideoUrl, '_blank');
+            showToast('直链下载失败，已在新窗口打开，请长按保存');
+            return;
+          }
 
-          const response = await fetch(currentVideoUrl);
-          if (!response.ok) throw new Error('下载失败');
-
-          const blob = await response.blob();
           const blobUrl = URL.createObjectURL(blob);
           const a = document.createElement('a');
           a.href = blobUrl;
 
           const ext = currentVideoUrl.match(/\.(mp4|mov|webm)($|\?)/i);
           const fileExt = ext ? ext[1] : 'mp4';
-          const cfg = PLATFORM_CONFIG[currentPlatform];
+          const cfg = PLATFORM_CONFIG[currentPlatform] || { name: 'Video' };
           a.download = `${cfg.name}_video_${Date.now()}.${fileExt}`;
 
           document.body.appendChild(a);
           a.click();
           document.body.removeChild(a);
 
-          setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 3000);
           showToast('✅ 下载成功！');
         } catch (err) {
           console.error('Download error:', err);
