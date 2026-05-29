@@ -1329,8 +1329,14 @@ video::-webkit-media-controls{display:flex!important}
         }
       }
 
+      function isMobileDevice() {
+        return /Android|iPhone|iPad|iPod|webOS/i.test(navigator.userAgent)
+          || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
+      }
+
       function showPrivateChannelView(url) {
         const rawUrl = url.replace(/\/$/, '');
+        const isMobile = isMobileDevice();
 
         currentVideoUrl = rawUrl;
         currentPlatform = 'telegram';
@@ -1342,30 +1348,54 @@ video::-webkit-media-controls{display:flex!important}
         platformTag.className = `platform-tag ${cfg.tagClass}`;
         resultTitle.textContent = url;
 
-        videoContainer.innerHTML = `
-          <div class="video-placeholder" style="padding:40px 20px;flex-direction:column;gap:16px;">
-            <span style="font-size:36px;">🔒</span>
-            <span style="font-size:16px;font-weight:700;color:#e2e8f0;">无法直接提取视频</span>
-            <span style="font-size:13px;color:#94a3b8;text-align:center;line-height:1.6;">
-              该视频需要 Telegram 登录状态才能访问<br>
-              <span style="color:#6366f1;">正在新标签页中打开...</span>
-            </span>
-            <button id="privateChannelOpenBtn"
-              style="background:linear-gradient(135deg,#6366f1,#7c3aed);color:#fff;border:none;padding:12px 28px;border-radius:22px;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;margin-top:8px;">
-              在新标签页中打开
-            </button>
-          </div>`;
+        if (isMobile) {
+          videoContainer.innerHTML = `
+            <div class="video-placeholder" style="padding:32px 20px;flex-direction:column;gap:14px;">
+              <span style="font-size:36px;">�</span>
+              <span style="font-size:16px;font-weight:700;color:#e2e8f0;">无法直接提取视频</span>
+              <span style="font-size:13px;color:#94a3b8;text-align:center;line-height:1.6;">该视频需在浏览器中登录 Telegram Web 后查看<br>请复制链接并手动粘贴到地址栏打开</span>
+              <input id="privateChannelLinkInput" readonly
+                style="width:100%;max-width:300px;padding:10px 14px;border:1px solid #374151;border-radius:12px;background:#1a1a2e;color:#94a3b8;font-size:12px;font-family:monospace;text-align:center;outline:none;"
+                value="${rawUrl}">
+              <button id="privateChannelCopyBtn"
+                style="background:linear-gradient(135deg,#6366f1,#7c3aed);color:#fff;border:none;padding:12px 28px;border-radius:22px;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;">
+                复制链接并手动打开
+              </button>
+              <span style="font-size:11px;color:#64748b;text-align:center;line-height:1.5;">复制后请粘贴到浏览器地址栏访问<br>（点击链接会跳转到 App）</span>
+            </div>`;
+        } else {
+          videoContainer.innerHTML = `
+            <div class="video-placeholder" style="padding:40px 20px;flex-direction:column;gap:16px;">
+              <span style="font-size:36px;">🔒</span>
+              <span style="font-size:16px;font-weight:700;color:#e2e8f0;">无法直接提取视频</span>
+              <span style="font-size:13px;color:#94a3b8;text-align:center;line-height:1.6;">该视频需要 Telegram 登录状态才能访问<br><span style="color:#6366f1;">正在新标签页中打开...</span></span>
+              <button id="privateChannelOpenBtn"
+                style="background:linear-gradient(135deg,#6366f1,#7c3aed);color:#fff;border:none;padding:12px 28px;border-radius:22px;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;margin-top:8px;">
+                在新标签页中打开
+              </button>
+            </div>`;
+        }
 
         resultCard.classList.add('visible');
         resultCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
         saveHistory(url, 'telegram', rawUrl);
-        setStatus('� 新标签页已打开，在 Telegram Web 中长按视频即可保存', '');
 
-        const btn = document.getElementById('privateChannelOpenBtn');
-        if (btn) {
-          btn.addEventListener('click', () => window.open(rawUrl, '_blank'));
+        if (isMobile) {
+          setStatus('📋 请复制链接并粘贴到地址栏打开', '');
+          const copyBtn = document.getElementById('privateChannelCopyBtn');
+          if (copyBtn) {
+            copyBtn.addEventListener('click', async () => {
+              try { await navigator.clipboard.writeText(rawUrl); }
+              catch { const inp = document.getElementById('privateChannelLinkInput'); if (inp) { inp.select(); document.execCommand('copy'); } }
+              showToast('✅ 已复制！请粘贴到浏览器地址栏打开');
+            });
+          }
+        } else {
+          setStatus('📺 新标签页已打开', '');
+          const btn = document.getElementById('privateChannelOpenBtn');
+          if (btn) btn.addEventListener('click', () => window.open(rawUrl, '_blank'));
+          setTimeout(() => window.open(rawUrl, '_blank'), 600);
         }
-        setTimeout(() => window.open(rawUrl, '_blank'), 600);
       }
 
       function showPrivateChannelResult(videoUrl, sourceUrl) {
@@ -1380,32 +1410,34 @@ video::-webkit-media-controls{display:flex!important}
         resultTitle.textContent = sourceUrl;
 
         const rawUrl = sourceUrl.replace(/\/$/, '');
+        const isMobile = isMobileDevice();
 
-        videoContainer.innerHTML = `
-          <div class="video-placeholder" style="padding:40px 20px;flex-direction:column;gap:14px;">
-            <span style="font-size:36px;">🔒</span>
-            <span style="font-size:16px;font-weight:700;color:#e2e8f0;">视频已提取，需登录查看</span>
-            <span style="font-size:13px;color:#94a3b8;text-align:center;line-height:1.6;">
-              视频地址已解析，但需要您的 Telegram 登录态才能播放<br>
-              <span style="color:#6366f1;">正在新标签页中打开...</span>
-            </span>
-            <button id="privateChannelOpenBtn"
-              style="background:linear-gradient(135deg,#6366f1,#7c3aed);color:#fff;border:none;padding:12px 28px;border-radius:22px;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;margin-top:4px;">
-              在 Telegram Web 中播放
-            </button>
-            <span style="font-size:11px;color:#64748b;">打开后长按视频即可保存到手机</span>
-          </div>`;
+        if (isMobile) {
+          videoContainer.innerHTML = `<div class="video-placeholder" style="padding:32px 20px;flex-direction:column;gap:14px;"><span style="font-size:36px;">�</span><span style="font-size:16px;font-weight:700;color:#e2e8f0;">视频已提取，需登录查看</span><span style="font-size:13px;color:#94a3b8;text-align:center;line-height:1.6;">视频地址已解析，请在浏览器中登录 Telegram Web 后查看<br>复制链接并手动粘贴到地址栏打开</span><input id="privateChannelLinkInput" readonly style="width:100%;max-width:300px;padding:10px 14px;border:1px solid #374151;border-radius:12px;background:#1a1a2e;color:#94a3b8;font-size:12px;font-family:monospace;text-align:center;outline:none;" value="${rawUrl}"><button id="privateChannelCopyBtn" style="background:linear-gradient(135deg,#6366f1,#7c3aed);color:#fff;border:none;padding:12px 28px;border-radius:22px;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;">复制链接并手动打开</button><span style="font-size:11px;color:#64748b;text-align:center;line-height:1.5;">复制后请粘贴到浏览器地址栏访问<br>（点击链接会跳转到 App）</span></div>`;
+        } else {
+          videoContainer.innerHTML = `<div class="video-placeholder" style="padding:40px 20px;flex-direction:column;gap:14px;"><span style="font-size:36px;">🔒</span><span style="font-size:16px;font-weight:700;color:#e2e8f0;">视频已提取，需登录查看</span><span style="font-size:13px;color:#94a3b8;text-align:center;line-height:1.6;">视频地址已解析<br><span style="color:#6366f1;">正在新标签页中打开...</span></span><button id="privateChannelOpenBtn" style="background:linear-gradient(135deg,#6366f1,#7c3aed);color:#fff;border:none;padding:12px 28px;border-radius:22px;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;margin-top:4px;">在 Telegram Web 中播放</button><span style="font-size:11px;color:#64748b;">打开后长按视频即可保存到手机</span></div>`;
+        }
 
         resultCard.classList.add('visible');
         resultCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
         saveHistory(sourceUrl, 'telegram', videoUrl);
-        setStatus('� Telegram 新标签页已打开，长按视频保存', '');
 
-        const btn = document.getElementById('privateChannelOpenBtn');
-        if (btn) {
-          btn.addEventListener('click', () => window.open(rawUrl, '_blank'));
+        if (isMobile) {
+          setStatus('📋 请复制链接并粘贴到地址栏打开', '');
+          const copyBtn = document.getElementById('privateChannelCopyBtn');
+          if (copyBtn) {
+            copyBtn.addEventListener('click', async () => {
+              try { await navigator.clipboard.writeText(rawUrl); }
+              catch { const inp = document.getElementById('privateChannelLinkInput'); if (inp) { inp.select(); document.execCommand('copy'); } }
+              showToast('✅ 已复制！请粘贴到浏览器地址栏打开');
+            });
+          }
+        } else {
+          setStatus('📺 新标签页已打开', '');
+          const btn = document.getElementById('privateChannelOpenBtn');
+          if (btn) btn.addEventListener('click', () => window.open(rawUrl, '_blank'));
+          setTimeout(() => window.open(rawUrl, '_blank'), 600);
         }
-        setTimeout(() => window.open(rawUrl, '_blank'), 600);
       }
 
       async function downloadVideo() {
