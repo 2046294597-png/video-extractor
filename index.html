@@ -1316,10 +1316,6 @@ video::-webkit-media-controls{display:flex!important}
           }
           saveHistory(url, platform, httpsUrl);
         } catch (err) {
-          if (platform === 'telegram' && /t\.me\/c\/\d+/.test(url)) {
-            showPrivateChannelView(url);
-            return;
-          }
           if (platform === 'telegram') {
             showPrivateChannelView(url);
             return;
