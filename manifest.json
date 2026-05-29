@@ -2,13 +2,13 @@
   "name": "视频提取器",
   "short_name": "视频提取",
   "description": "提取 Telegram 和 Twitter/X 视频，支持在线预览与下载",
-  "start_url": "/",
+  "start_url": "./",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#0f0f0f",
   "theme_color": "#6366f1",
   "lang": "zh-CN",
-  "scope": "/",
+  "scope": "./",
   "icons": [
     {
       "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect width='512' height='512' rx='100' fill='%230f0f0f'/><rect width='512' height='512' rx='100' fill='url(%23g)'/><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0%25' stop-color='%236366f1'/><stop offset='100%25' stop-color='%237c3aed'/></linearGradient></defs><text x='256' y='200' text-anchor='middle' font-size='140'>🎬</text><text x='256' y='380' text-anchor='middle' font-size='72' fill='white' font-weight='bold'>提取</text></svg>",
