@@ -1330,9 +1330,9 @@ video::-webkit-media-controls{display:flex!important}
       }
 
       function showPrivateChannelView(url) {
-        const cleanUrl = url.replace(/\?.*$/, '').replace(/\/$/, '');
+        const rawUrl = url.replace(/\/$/, '');
 
-        currentVideoUrl = cleanUrl;
+        currentVideoUrl = rawUrl;
         currentPlatform = 'telegram';
         currentSourceUrl = url;
         currentIsPrivateChannel = true;
@@ -1345,9 +1345,9 @@ video::-webkit-media-controls{display:flex!important}
         videoContainer.innerHTML = `
           <div class="video-placeholder" style="padding:40px 20px;flex-direction:column;gap:16px;">
             <span style="font-size:36px;">🔒</span>
-            <span style="font-size:16px;font-weight:700;color:#e2e8f0;">私密频道视频</span>
+            <span style="font-size:16px;font-weight:700;color:#e2e8f0;">无法直接提取视频</span>
             <span style="font-size:13px;color:#94a3b8;text-align:center;line-height:1.6;">
-              需要在 Telegram Web 中登录后观看<br>
+              该视频需要 Telegram 登录状态才能访问<br>
               <span style="color:#6366f1;">正在新标签页中打开...</span>
             </span>
             <button id="privateChannelOpenBtn"
@@ -1358,14 +1358,14 @@ video::-webkit-media-controls{display:flex!important}
 
         resultCard.classList.add('visible');
         resultCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        saveHistory(url, 'telegram', cleanUrl);
-        setStatus('🔒 私密频道 — 新标签页已打开，长按视频即可保存', '');
+        saveHistory(url, 'telegram', rawUrl);
+        setStatus('� 新标签页已打开，在 Telegram Web 中长按视频即可保存', '');
 
         const btn = document.getElementById('privateChannelOpenBtn');
         if (btn) {
-          btn.addEventListener('click', () => window.open(cleanUrl, '_blank'));
+          btn.addEventListener('click', () => window.open(rawUrl, '_blank'));
         }
-        setTimeout(() => window.open(cleanUrl, '_blank'), 600);
+        setTimeout(() => window.open(rawUrl, '_blank'), 600);
       }
 
       function showPrivateChannelResult(videoUrl, sourceUrl) {
@@ -1379,14 +1379,14 @@ video::-webkit-media-controls{display:flex!important}
         platformTag.className = `platform-tag ${cfg.tagClass}`;
         resultTitle.textContent = sourceUrl;
 
-        const cleanUrl = sourceUrl.replace(/\?.*$/, '').replace(/\/$/, '');
+        const rawUrl = sourceUrl.replace(/\/$/, '');
 
         videoContainer.innerHTML = `
           <div class="video-placeholder" style="padding:40px 20px;flex-direction:column;gap:14px;">
             <span style="font-size:36px;">🔒</span>
-            <span style="font-size:16px;font-weight:700;color:#e2e8f0;">私密频道视频已找到</span>
+            <span style="font-size:16px;font-weight:700;color:#e2e8f0;">视频已提取，需登录查看</span>
             <span style="font-size:13px;color:#94a3b8;text-align:center;line-height:1.6;">
-              视频地址已提取，但需要您的 Telegram 登录状态才能访问<br>
+              视频地址已解析，但需要您的 Telegram 登录态才能播放<br>
               <span style="color:#6366f1;">正在新标签页中打开...</span>
             </span>
             <button id="privateChannelOpenBtn"
@@ -1399,22 +1399,22 @@ video::-webkit-media-controls{display:flex!important}
         resultCard.classList.add('visible');
         resultCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
         saveHistory(sourceUrl, 'telegram', videoUrl);
-        setStatus('🔒 私密频道 — Telegram Web 新标签页已打开', '');
+        setStatus('� Telegram 新标签页已打开，长按视频保存', '');
 
         const btn = document.getElementById('privateChannelOpenBtn');
         if (btn) {
-          btn.addEventListener('click', () => window.open(cleanUrl, '_blank'));
+          btn.addEventListener('click', () => window.open(rawUrl, '_blank'));
         }
-        setTimeout(() => window.open(cleanUrl, '_blank'), 600);
+        setTimeout(() => window.open(rawUrl, '_blank'), 600);
       }
 
       async function downloadVideo() {
         if (!currentVideoUrl) return;
 
         if (currentIsPrivateChannel) {
-          const cleanUrl = currentSourceUrl.replace(/\?.*$/, '').replace(/\/$/, '');
-          window.open(cleanUrl, '_blank');
-          showToast('已在新标签页打开，登录 Telegram Web 后长按视频即可保存');
+          const rawUrl = currentSourceUrl.replace(/\/$/, '');
+          window.open(rawUrl, '_blank');
+          showToast('已在新标签页打开，长按视频即可保存');
           return;
         }
 
