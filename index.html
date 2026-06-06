@@ -719,7 +719,7 @@
   <div class="app-container">
     <header class="header">
       <div class="logo">🎬</div>
-      <h1>视频提取器</h1>
+      <h1>视频提取器 <span style="font-size:11px;color:#64748b;font-weight:400;">v10</span></h1>
       <p class="subtitle">支持 Telegram · Twitter / X 视频下载</p>
       <div class="platform-badges">
         <span class="platform-badge badge-tg">✈️ Telegram</span>
@@ -1405,6 +1405,61 @@ video::-webkit-media-controls{display:flex!important}
         return null;
       }
 
+      async function tryExtractViaNitter(tweetId) {
+        const nitterInstances = [
+          'https://nitter.net',
+          'https://nitter.poast.org',
+          'https://nitter.privacydev.net',
+        ];
+        for (const base of nitterInstances) {
+          try {
+            const url = `${base}/i/status/${tweetId}`;
+            const html = await fetchPageViaProxy(url);
+            if (!html) continue;
+
+            const videoIds = [];
+            const thumbRegex = /amplify_video_thumb(?:%2F|\/)(\d+)(?:%2F|\/)img(?:%2F|\/)([^"'\s?&.]+)/gi;
+            let m;
+            while ((m = thumbRegex.exec(html)) !== null) {
+              const id = m[1];
+              const name = m[2];
+              if (!videoIds.some(v => v.id === id)) {
+                videoIds.push({ id, name });
+              }
+            }
+
+            if (!videoIds.length) {
+              const extTwRegex = /ext_tw_video(?:%2F|\/)(\d+)(?:%2F|\/)pu(?:%2F|\/)vid(?:%2F|\/)avc1(?:%2F|\/)[^"'\s]*?([^"'\s/]+)\.mp4/gi;
+              while ((m = extTwRegex.exec(html)) !== null) {
+                const fullUrl = m[0].replace(/%2F/g, '/');
+                if (!videoIds.some(v => v.url === fullUrl)) {
+                  videoIds.push({ url: 'https://video.twimg.com/' + fullUrl });
+                }
+              }
+              if (videoIds.length) return videoIds.map(v => v.url);
+            }
+
+            if (!videoIds.length) {
+              const anyVideo = html.match(/https?:\/\/video\.twimg\.com\/[^\s"'<>]+\.mp4[^\s"'<>]*/gi);
+              if (anyVideo) return [...new Set(anyVideo)];
+            }
+
+            if (!videoIds.length) continue;
+
+            const urls = [];
+            const resolutions = ['720x1280', '1280x720', '640x1136', '320x568'];
+            for (const v of videoIds) {
+              for (const res of resolutions) {
+                urls.push(`https://video.twimg.com/amplify_video/${v.id}/vid/avc1/${res}/${v.name}.mp4?tag=21`);
+              }
+              urls.push(`https://video.twimg.com/ext_tw_video/${v.id}/pu/vid/avc1/720x1280/${v.name}.mp4?tag=12`);
+            }
+            return urls;
+          } catch { continue; }
+        }
+        return [];
+      }
+
       async function extractTwitterVideo(url) {
         const tweetMatch = url.match(/(?:twitter\.com|x\.com|fxtwitter\.com|vxtwitter\.com|fixupx\.com)\/\w+\/status\/(\d+)/i);
         if (!tweetMatch) {
@@ -1473,6 +1528,10 @@ video::-webkit-media-controls{display:flex!important}
               const raw = html.match(/(https?:\/\/[^\s"'<>]*twimg\.com[^\s"'<>]*\.(?:mp4|m3u8)[^\s"'<>]*)/i);
               return raw ? [raw[1]] : [];
             }
+          },
+          {
+            name: 'Nitter',
+            fn: () => tryExtractViaNitter(tweetId)
           }
         ];
 
