@@ -670,6 +670,49 @@
       margin-top: 6px;
       font-variant-numeric: tabular-nums;
     }
+
+    .video-switcher {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 8px 16px;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+    }
+
+    .video-switcher.active {
+      display: flex;
+    }
+
+    .video-switcher-arrow {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-size: 16px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+      font-family: inherit;
+    }
+
+    .video-switcher-arrow:active {
+      background: var(--primary);
+      border-color: var(--primary);
+    }
+
+    .video-switcher-indicator {
+      font-size: 12px;
+      color: var(--text-secondary);
+      min-width: 60px;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+    }
   </style>
 </head>
 <body>
@@ -718,6 +761,11 @@
       </div>
       <div class="video-container" id="videoContainer">
         <div class="video-placeholder">🎥</div>
+      </div>
+      <div class="video-switcher" id="videoSwitcher">
+        <button class="video-switcher-arrow" id="switcherPrev">◀</button>
+        <span class="video-switcher-indicator" id="switcherIndicator">1/1</span>
+        <button class="video-switcher-arrow" id="switcherNext">▶</button>
       </div>
       <div class="result-actions">
         <button class="download-btn btn-download" id="downloadBtn">
@@ -800,6 +848,10 @@
       const downloadBtn = document.getElementById('downloadBtn');
       const copyBtn = document.getElementById('copyBtn');
       const shareBtn = document.getElementById('shareBtn');
+      const videoSwitcher = document.getElementById('videoSwitcher');
+      const switcherPrev = document.getElementById('switcherPrev');
+      const switcherNext = document.getElementById('switcherNext');
+      const switcherIndicator = document.getElementById('switcherIndicator');
       const historyList = document.getElementById('historyList');
       const historyClearBtn = document.getElementById('historyClearBtn');
       const toast = document.getElementById('toast');
@@ -807,7 +859,8 @@
       const downloadProgressFill = document.getElementById('downloadProgressFill');
       const downloadProgressText = document.getElementById('downloadProgressText');
 
-      let currentVideoUrl = null;
+      let currentVideoUrls = [];
+      let currentVideoIndex = 0;
       let currentBlobUrl = null;
       let currentPlatform = null;
       let currentSourceUrl = null;
@@ -970,6 +1023,45 @@
         });
       }
 
+      function getCurrentVideoUrl() {
+        return currentVideoUrls[currentVideoIndex] || null;
+      }
+
+      function showVideoSwitcher(total) {
+        if (total > 1) {
+          videoSwitcher.classList.add('active');
+          switcherIndicator.textContent = (currentVideoIndex + 1) + '/' + total;
+          switcherPrev.style.visibility = currentVideoIndex > 0 ? 'visible' : 'hidden';
+          switcherNext.style.visibility = currentVideoIndex < total - 1 ? 'visible' : 'hidden';
+        } else {
+          videoSwitcher.classList.remove('active');
+        }
+      }
+
+      function switchToVideo(index) {
+        currentVideoIndex = index;
+        const url = currentVideoUrls[index];
+        if (!url) return;
+        showVideoSwitcher(currentVideoUrls.length);
+        if (currentPlatform === 'twitter' && /twimg\.com/i.test(url)) {
+          videoContainer.innerHTML = `<iframe sandbox="allow-scripts allow-fullscreen" src="about:blank" style="width:100%;aspect-ratio:16/9;border:none;background:#000" id="videoFrame" allow="autoplay; fullscreen"></iframe>`;
+          const frame = document.getElementById('videoFrame');
+          const blob = new Blob([buildIframeHTML(url)], { type: 'text/html' });
+          const frameUrl = URL.createObjectURL(blob);
+          frame.src = frameUrl;
+          currentBlobUrl = frameUrl;
+        } else {
+          videoContainer.innerHTML = `
+            <div class="video-placeholder">
+              <span style="display:flex;flex-direction:column;align-items:center;gap:8px;">
+                <span class="spinner" style="width:32px;height:32px;border-color:rgba(99,102,241,0.3);border-top-color:#6366f1;"></span>
+                <span style="font-size:13px;color:#94a3b8;">正在缓冲视频...</span>
+              </span>
+            </div>`;
+          loadVideoViaProxy(url);
+        }
+      }
+
       function escapeHtml(str) {
         const div = document.createElement('div');
         div.textContent = str;
@@ -992,8 +1084,9 @@ video::-webkit-media-controls{display:flex!important}
 </body></html>`;
       }
 
-      function showResult(videoUrl, platform, sourceUrl) {
-        currentVideoUrl = videoUrl;
+      function showResult(videoUrls, platform, sourceUrl) {
+        currentVideoUrls = Array.isArray(videoUrls) ? videoUrls : [videoUrls];
+        currentVideoIndex = 0;
         currentPlatform = platform;
         currentSourceUrl = sourceUrl;
         if (currentBlobUrl) { URL.revokeObjectURL(currentBlobUrl); currentBlobUrl = null; }
@@ -1003,17 +1096,18 @@ video::-webkit-media-controls{display:flex!important}
         platformTag.className = `platform-tag ${cfg.tagClass}`;
         resultTitle.textContent = sourceUrl;
 
-        const isTwimg = /twimg\.com/i.test(videoUrl);
+        const url = currentVideoUrls[0];
+        const isTwimg = /twimg\.com/i.test(url);
         const platformIsTwitter = platform === 'twitter';
 
         if (platformIsTwitter && isTwimg) {
           videoContainer.innerHTML = `<iframe sandbox="allow-scripts allow-fullscreen" src="about:blank" style="width:100%;aspect-ratio:16/9;border:none;background:#000" id="videoFrame" allow="autoplay; fullscreen"></iframe>`;
           const frame = document.getElementById('videoFrame');
-          const blob = new Blob([buildIframeHTML(videoUrl)], { type: 'text/html' });
+          const blob = new Blob([buildIframeHTML(url)], { type: 'text/html' });
           const frameUrl = URL.createObjectURL(blob);
           frame.src = frameUrl;
           currentBlobUrl = frameUrl;
-          setStatus('✅ 提取成功（沙箱模式加载中）', 'success');
+          setStatus('✅ 提取成功（沙箱模式加载中）' + (currentVideoUrls.length > 1 ? ' — ' + currentVideoUrls.length + ' 个视频' : ''), 'success');
         } else {
           videoContainer.innerHTML = `
             <div class="video-placeholder">
@@ -1022,10 +1116,11 @@ video::-webkit-media-controls{display:flex!important}
                 <span style="font-size:13px;color:#94a3b8;">正在缓冲视频...</span>
               </span>
             </div>`;
-          setStatus('✅ 预览加载中...', 'success');
-          loadVideoViaProxy(videoUrl);
+          setStatus('✅ 预览加载中...' + (currentVideoUrls.length > 1 ? ' — ' + currentVideoUrls.length + ' 个视频' : ''), 'success');
+          loadVideoViaProxy(url);
         }
 
+        showVideoSwitcher(currentVideoUrls.length);
         resultCard.classList.add('visible');
         resultCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
@@ -1213,20 +1308,32 @@ video::-webkit-media-controls{display:flex!important}
         return variants[variants.length - 1].url;
       }
 
-      function parseFxTwitterData(data) {
-        if (data.code === 404 || !data.tweet) return null;
+      function parseFxTwitterAll(data) {
+        if (data.code === 404 || !data.tweet) return [];
         const tweet = data.tweet;
         const media = tweet.media;
-        if (!media || !media.all || !media.all.length) return null;
+        if (!media || !media.all || !media.all.length) return [];
         const videos = media.all.filter(m => m.type === 'video' || m.type === 'gif');
-        if (!videos.length) return null;
-        const video = videos[0];
-        let url = video.url;
-        if (video.variants && video.variants.length) {
-          const best = pickBestVariant(video.variants);
-          if (best) url = best;
-        }
-        return url || null;
+        return videos.map(v => {
+          let url = v.url;
+          if (v.variants && v.variants.length) {
+            const best = pickBestVariant(v.variants);
+            if (best) url = best;
+          }
+          return url;
+        }).filter(Boolean);
+      }
+
+      function parseSyndicationAll(data) {
+        if (!data || !data.mediaDetails) return [];
+        const videos = data.mediaDetails.filter(m => m.type === 'video' || m.type === 'animated_gif');
+        return videos.map(v => {
+          if (v.videoInfo && v.videoInfo.variants) {
+            const best = pickBestVariant(v.videoInfo.variants);
+            if (best) return best;
+          }
+          return null;
+        }).filter(Boolean);
       }
 
       async function tryFetchJson(apiUrl, errorMsg) {
@@ -1310,81 +1417,61 @@ video::-webkit-media-controls{display:flex!important}
             name: 'fxtwitter API',
             fn: async () => {
               const data = await tryFetchJson(`https://api.fxtwitter.com/status/${tweetId}`);
-              if (!data) return null;
-              return parseFxTwitterData(data);
+              return data ? parseFxTwitterAll(data) : [];
             }
           },
           {
             name: 'fxtwitter (代理)',
             fn: async () => {
               const data = await tryFetchViaProxy(`https://api.fxtwitter.com/status/${tweetId}`);
-              if (!data) return null;
-              return parseFxTwitterData(data);
+              return data ? parseFxTwitterAll(data) : [];
             }
           },
           {
             name: 'Syndication API',
             fn: async () => {
               const data = await tryFetchJson(`https://cdn.syndication.twimg.com/tweet-result?id=${tweetId}&lang=en`);
-              if (!data) return null;
-              if (data.mediaDetails) {
-                const videos = data.mediaDetails.filter(m => m.type === 'video' || m.type === 'animated_gif');
-                if (videos.length === 0) return null;
-                const v = videos[0];
-                if (v.videoInfo && v.videoInfo.variants) {
-                  const best = pickBestVariant(v.videoInfo.variants);
-                  if (best) return best;
-                }
-              }
-              return null;
+              return data ? parseSyndicationAll(data) : [];
             }
           },
           {
             name: 'Syndication (代理)',
             fn: async () => {
               const data = await tryFetchViaProxy(`https://cdn.syndication.twimg.com/tweet-result?id=${tweetId}&lang=en`);
-              if (!data) return null;
-              if (data.mediaDetails) {
-                const videos = data.mediaDetails.filter(m => m.type === 'video' || m.type === 'animated_gif');
-                if (videos.length === 0) return null;
-                const v = videos[0];
-                if (v.videoInfo && v.videoInfo.variants) {
-                  const best = pickBestVariant(v.videoInfo.variants);
-                  if (best) return best;
-                }
-              }
-              return null;
+              return data ? parseSyndicationAll(data) : [];
             }
           },
           {
             name: 'vxtwitter API',
             fn: async () => {
               const data = await tryFetchJson(`https://api.vxtwitter.com/status/${tweetId}`);
-              if (!data) return null;
-              return parseFxTwitterData(data);
+              return data ? parseFxTwitterAll(data) : [];
             }
           },
           {
             name: 'vxtwitter (代理)',
             fn: async () => {
               const data = await tryFetchViaProxy(`https://api.vxtwitter.com/status/${tweetId}`);
-              if (!data) return null;
-              return parseFxTwitterData(data);
+              return data ? parseFxTwitterAll(data) : [];
             }
           },
           {
             name: 'twitsave',
-            fn: () => tryExtractViaTwitsave(tweetId)
+            fn: async () => {
+              const url = await tryExtractViaTwitsave(tweetId);
+              return url ? [url] : [];
+            }
           },
           {
             name: '嵌入页解析',
             fn: async () => {
               const embedUrl = `https://platform.twitter.com/embed/Tweet.html?id=${tweetId}`;
               const html = await fetchPageViaProxy(embedUrl);
-              if (!html) return null;
-              const match = html.match(/src=["']([^"']*twimg\.com[^"']*\.(?:mp4|m3u8)[^"']*)["']/i)
-                || html.match(/(https?:\/\/[^\s"'<>]*twimg\.com[^\s"'<>]*\.(?:mp4|m3u8)[^\s"'<>]*)/i);
-              return match ? match[1] : null;
+              if (!html) return [];
+              const matches = [...html.matchAll(/src=["']([^"']*twimg\.com[^"']*\.(?:mp4|m3u8)[^"']*)["']/g)];
+              if (matches.length) return matches.map(m => m[1]);
+              const raw = html.match(/(https?:\/\/[^\s"'<>]*twimg\.com[^\s"'<>]*\.(?:mp4|m3u8)[^\s"'<>]*)/i);
+              return raw ? [raw[1]] : [];
             }
           }
         ];
@@ -1392,10 +1479,8 @@ video::-webkit-media-controls{display:flex!important}
         for (const source of sources) {
           setStatus('正在通过 ' + source.name + ' 解析...', '');
           try {
-            const videoUrl = await source.fn();
-            if (videoUrl) {
-              return videoUrl;
-            }
+            const urls = await source.fn();
+            if (urls.length) return urls;
           } catch { continue; }
         }
 
@@ -1421,27 +1506,28 @@ video::-webkit-media-controls{display:flex!important}
         setStatus('正在解析视频...', '');
 
         try {
-          let videoUrl;
+          let videoUrls;
           currentIsPrivateChannel = false;
           if (platform === 'telegram') {
-            videoUrl = await extractTelegramVideo(url);
+            const singleUrl = await extractTelegramVideo(url);
+            videoUrls = [singleUrl];
             if (/t\.me\/c\/\d+/.test(url)) {
               currentIsPrivateChannel = true;
             }
           } else if (platform === 'twitter') {
-            videoUrl = await extractTwitterVideo(url);
+            videoUrls = await extractTwitterVideo(url);
           } else {
             throw new Error('不支持的平台');
           }
 
-          const httpsUrl = videoUrl.replace(/^http:\/\//i, 'https://');
+          const httpsUrls = videoUrls.map(u => u.replace(/^http:\/\//i, 'https://'));
 
           if (currentIsPrivateChannel) {
-            showPrivateChannelResult(httpsUrl, url);
+            showPrivateChannelResult(httpsUrls[0], url);
           } else {
-            showResult(httpsUrl, platform, url);
+            showResult(httpsUrls, platform, url);
           }
-          saveHistory(url, platform, httpsUrl);
+          saveHistory(url, platform, httpsUrls[0]);
         } catch (err) {
           if (err && err.nsfwBlocked) {
             showNSFWBlockedView(url);
@@ -1462,7 +1548,8 @@ video::-webkit-media-controls{display:flex!important}
 
       function showNSFWBlockedView(url) {
         const rawUrl = url.replace(/\/$/, '');
-        currentVideoUrl = rawUrl;
+        currentVideoUrls = [rawUrl];
+        currentVideoIndex = 0;
         currentPlatform = 'telegram';
         currentSourceUrl = url;
         currentIsPrivateChannel = true;
@@ -1519,7 +1606,8 @@ video::-webkit-media-controls{display:flex!important}
         const rawUrl = url.replace(/\/$/, '');
         const isMobile = isMobileDevice();
 
-        currentVideoUrl = rawUrl;
+        currentVideoUrls = [rawUrl];
+        currentVideoIndex = 0;
         currentPlatform = 'telegram';
         currentSourceUrl = url;
         currentIsPrivateChannel = true;
@@ -1532,7 +1620,7 @@ video::-webkit-media-controls{display:flex!important}
         if (isMobile) {
           videoContainer.innerHTML = `
             <div class="video-placeholder" style="padding:32px 20px;flex-direction:column;gap:14px;">
-              <span style="font-size:36px;">�</span>
+              <span style="font-size:36px;">📋</span>
               <span style="font-size:16px;font-weight:700;color:#e2e8f0;">无法直接提取视频</span>
               <span style="font-size:13px;color:#94a3b8;text-align:center;line-height:1.6;">该视频需在浏览器中登录 Telegram Web 后查看<br>请复制链接并手动粘贴到地址栏打开</span>
               <input id="privateChannelLinkInput" readonly
@@ -1580,7 +1668,8 @@ video::-webkit-media-controls{display:flex!important}
       }
 
       function showPrivateChannelResult(videoUrl, sourceUrl) {
-        currentVideoUrl = videoUrl;
+        currentVideoUrls = [videoUrl];
+        currentVideoIndex = 0;
         currentPlatform = 'telegram';
         currentSourceUrl = sourceUrl;
         currentIsPrivateChannel = true;
@@ -1674,7 +1763,8 @@ video::-webkit-media-controls{display:flex!important}
       }
 
       async function downloadVideo() {
-        if (!currentVideoUrl) return;
+        const url = getCurrentVideoUrl();
+        if (!url) return;
 
         if (currentIsPrivateChannel) {
           const rawUrl = currentSourceUrl.replace(/\/$/, '');
@@ -1688,8 +1778,8 @@ video::-webkit-media-controls{display:flex!important}
           return;
         }
 
-        if (/t\.me/.test(currentVideoUrl)) {
-          window.open(currentVideoUrl, '_blank');
+        if (/t\.me/.test(url)) {
+          window.open(url, '_blank');
           showToast('已在新标签页打开，长按视频即可保存');
           return;
         }
@@ -1698,7 +1788,7 @@ video::-webkit-media-controls{display:flex!important}
         hideDownloadProgress();
         const isMobile = isMobileDevice();
 
-        const ext = currentVideoUrl.match(/\.(mp4|mov|webm)($|\?)/i);
+        const ext = url.match(/\.(mp4|mov|webm)($|\?)/i);
         const fileExt = ext ? ext[1] : 'mp4';
         const cfg = PLATFORM_CONFIG[currentPlatform] || { name: 'Video' };
         const filename = `${cfg.name}_video_${Date.now()}.${fileExt}`;
@@ -1706,7 +1796,7 @@ video::-webkit-media-controls{display:flex!important}
         let blob = null;
 
         try {
-          blob = await fetchVideoAsBlob(currentVideoUrl, showDownloadProgress);
+          blob = await fetchVideoAsBlob(url, showDownloadProgress);
         } catch { hideDownloadProgress(); }
 
         hideDownloadProgress();
@@ -1723,24 +1813,25 @@ video::-webkit-media-controls{display:flex!important}
           return;
         }
 
-        if (isMobile && /twimg\.com/i.test(currentVideoUrl)) {
-          openVideoDownloadPage(currentVideoUrl);
+        if (isMobile && /twimg\.com/i.test(url)) {
+          openVideoDownloadPage(url);
           showToast('代理下载失败，已在新标签页打开长按保存');
           return;
         }
 
-        window.open(currentVideoUrl, '_blank');
+        window.open(url, '_blank');
         showToast('下载失败，已在新标签页打开，请长按保存');
       }
 
       async function copyVideoUrl() {
-        if (!currentVideoUrl) return;
+        const url = getCurrentVideoUrl();
+        if (!url) return;
         try {
-          await navigator.clipboard.writeText(currentVideoUrl);
+          await navigator.clipboard.writeText(url);
           showToast('✅ 链接已复制到剪贴板');
         } catch {
           const ta = document.createElement('textarea');
-          ta.value = currentVideoUrl;
+          ta.value = url;
           ta.style.position = 'fixed';
           ta.style.opacity = '0';
           document.body.appendChild(ta);
@@ -1752,13 +1843,14 @@ video::-webkit-media-controls{display:flex!important}
       }
 
       async function shareVideo() {
-        if (!currentVideoUrl) return;
+        const url = getCurrentVideoUrl();
+        if (!url) return;
         if (navigator.share) {
           try {
             await navigator.share({
               title: '视频链接',
               text: currentSourceUrl,
-              url: currentVideoUrl
+              url: url
             });
           } catch {}
         } else {
@@ -1825,6 +1917,13 @@ video::-webkit-media-controls{display:flex!important}
       copyBtn.addEventListener('click', copyVideoUrl);
       shareBtn.addEventListener('click', shareVideo);
       historyClearBtn.addEventListener('click', clearAllHistory);
+
+      switcherPrev.addEventListener('click', () => {
+        if (currentVideoIndex > 0) switchToVideo(currentVideoIndex - 1);
+      });
+      switcherNext.addEventListener('click', () => {
+        if (currentVideoIndex < currentVideoUrls.length - 1) switchToVideo(currentVideoIndex + 1);
+      });
 
       const installBanner = document.getElementById('installBanner');
       const installBtn = document.getElementById('installBtn');
