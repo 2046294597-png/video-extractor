@@ -1564,6 +1564,28 @@ video::-webkit-media-controls{display:flex!important}
         }
       }
 
+      function buildVideoDownloadPage(videoUrl) {
+        return `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer">
+<title>视频下载</title>
+<style>*{margin:0;padding:0}body{background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;min-height:-webkit-fill-available}
+video{width:100%;max-height:100vh;max-height:-webkit-fill-available;display:block;outline:none}
+video::-webkit-media-controls{display:flex!important}
+.info{position:fixed;top:12px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.75);color:#fff;padding:8px 18px;border-radius:20px;font-size:13px;font-family:-apple-system,sans-serif;z-index:10;pointer-events:none;animation:fadeOut 3s 3s forwards}
+@keyframes fadeOut{to{opacity:0}}
+</style></head><body>
+<div class="info">长按视频保存到手机</div>
+<video src="${videoUrl.replace(/"/g, '&quot;')}" controls playsinline autoplay></video>
+</body></html>`;
+      }
+
+      function openVideoDownloadPage(videoUrl) {
+        const pageBlob = new Blob([buildVideoDownloadPage(videoUrl)], { type: 'text/html' });
+        const pageUrl = URL.createObjectURL(pageBlob);
+        window.open(pageUrl, '_blank');
+        setTimeout(() => URL.revokeObjectURL(pageUrl), 120000);
+      }
+
       function formatSize(bytes) {
         if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + ' KB';
         return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
@@ -1612,6 +1634,12 @@ video::-webkit-media-controls{display:flex!important}
         if (/t\.me/.test(currentVideoUrl)) {
           window.open(currentVideoUrl, '_blank');
           showToast('已在新标签页打开，长按视频即可保存');
+          return;
+        }
+
+        if (/twimg\.com/i.test(currentVideoUrl)) {
+          openVideoDownloadPage(currentVideoUrl);
+          showToast('✅ 已在新标签页打开，长按视频即可保存');
           return;
         }
 
