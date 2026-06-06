@@ -1694,12 +1694,6 @@ video::-webkit-media-controls{display:flex!important}
           return;
         }
 
-        if (/twimg\.com/i.test(currentVideoUrl)) {
-          openVideoDownloadPage(currentVideoUrl);
-          showToast('✅ 已在新标签页打开，长按视频即可保存');
-          return;
-        }
-
         showToast('正在下载...');
         hideDownloadProgress();
         const isMobile = isMobileDevice();
@@ -1718,14 +1712,10 @@ video::-webkit-media-controls{display:flex!important}
         hideDownloadProgress();
 
         if (blob && blob.size > 1000) {
-          const downloadStarted = triggerDownload(blob, filename);
+          triggerDownload(blob, filename);
 
           if (isMobile) {
-            setTimeout(() => {
-              window.open(currentVideoUrl, '_blank');
-              showToast('✅ 已保存！若未弹出请长按新窗口中的视频保存');
-            }, 800);
-            if (downloadStarted) showToast('✅ 下载完成！若未保存请长按弹出的视频');
+            showToast('✅ 下载完成！请在下载记录或文件中查看');
           } else {
             showToast('✅ 下载完成！');
           }
@@ -1733,14 +1723,14 @@ video::-webkit-media-controls{display:flex!important}
           return;
         }
 
-        if (isMobile) {
-          window.open(currentVideoUrl, '_blank');
-          showToast('直链下载：请在弹出页面中长按视频保存');
+        if (isMobile && /twimg\.com/i.test(currentVideoUrl)) {
+          openVideoDownloadPage(currentVideoUrl);
+          showToast('代理下载失败，已在新标签页打开长按保存');
           return;
         }
 
         window.open(currentVideoUrl, '_blank');
-        showToast('已在新窗口打开视频，请长按屏幕保存');
+        showToast('下载失败，已在新标签页打开，请长按保存');
       }
 
       async function copyVideoUrl() {
