@@ -1240,11 +1240,16 @@ video::-webkit-media-controls{display:flex!important}
       async function tryFetchViaProxy(apiUrl) {
         const proxies = [
           (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+          (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
           (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+          (u) => `https://api.cors.lol/?url=${encodeURIComponent(u)}`,
         ];
         for (const proxyFn of proxies) {
           try {
-            const resp = await fetch(proxyFn(apiUrl));
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), 15000);
+            const resp = await fetch(proxyFn(apiUrl), { signal: ctrl.signal });
+            clearTimeout(timer);
             if (resp.ok) {
               const text = await resp.text();
               try { return JSON.parse(text); } catch { continue; }
@@ -1255,15 +1260,22 @@ video::-webkit-media-controls{display:flex!important}
       }
 
       async function tryExtractViaTwitsave(tweetId) {
-        const urls = [
-          `https://twitsave.com/info?url=https://x.com/i/status/${tweetId}`,
-          `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://twitsave.com/info?url=https://x.com/i/status/${tweetId}`)}`,
+        const twitsaveUrl = `https://twitsave.com/info?url=https://x.com/i/status/${tweetId}`;
+        const proxyFns = [
+          (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+          (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
+          (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+          (u) => `https://api.cors.lol/?url=${encodeURIComponent(u)}`,
         ];
-        for (const fetchUrl of urls) {
+        for (const fn of proxyFns) {
           try {
-            const resp = await fetch(fetchUrl, {
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), 15000);
+            const resp = await fetch(fn(twitsaveUrl), {
+              signal: ctrl.signal,
               headers: { 'Accept': 'text/html' }
             });
+            clearTimeout(timer);
             if (!resp.ok) continue;
             const html = await resp.text();
             const jsonMatch = html.match(/<script[^>]*>\s*window\.__NUXT__\s*=\s*(\{.*?\});\s*<\/script>/s);
@@ -1311,6 +1323,40 @@ video::-webkit-media-controls{display:flex!important}
             }
           },
           {
+            name: 'Syndication API',
+            fn: async () => {
+              const data = await tryFetchJson(`https://cdn.syndication.twimg.com/tweet-result?id=${tweetId}&lang=en`);
+              if (!data) return null;
+              if (data.mediaDetails) {
+                const videos = data.mediaDetails.filter(m => m.type === 'video' || m.type === 'animated_gif');
+                if (videos.length === 0) return null;
+                const v = videos[0];
+                if (v.videoInfo && v.videoInfo.variants) {
+                  const best = pickBestVariant(v.videoInfo.variants);
+                  if (best) return best;
+                }
+              }
+              return null;
+            }
+          },
+          {
+            name: 'Syndication (代理)',
+            fn: async () => {
+              const data = await tryFetchViaProxy(`https://cdn.syndication.twimg.com/tweet-result?id=${tweetId}&lang=en`);
+              if (!data) return null;
+              if (data.mediaDetails) {
+                const videos = data.mediaDetails.filter(m => m.type === 'video' || m.type === 'animated_gif');
+                if (videos.length === 0) return null;
+                const v = videos[0];
+                if (v.videoInfo && v.videoInfo.variants) {
+                  const best = pickBestVariant(v.videoInfo.variants);
+                  if (best) return best;
+                }
+              }
+              return null;
+            }
+          },
+          {
             name: 'vxtwitter API',
             fn: async () => {
               const data = await tryFetchJson(`https://api.vxtwitter.com/status/${tweetId}`);
@@ -1329,6 +1375,17 @@ video::-webkit-media-controls{display:flex!important}
           {
             name: 'twitsave',
             fn: () => tryExtractViaTwitsave(tweetId)
+          },
+          {
+            name: '嵌入页解析',
+            fn: async () => {
+              const embedUrl = `https://platform.twitter.com/embed/Tweet.html?id=${tweetId}`;
+              const html = await fetchPageViaProxy(embedUrl);
+              if (!html) return null;
+              const match = html.match(/src=["']([^"']*twimg\.com[^"']*\.(?:mp4|m3u8)[^"']*)["']/i)
+                || html.match(/(https?:\/\/[^\s"'<>]*twimg\.com[^\s"'<>]*\.(?:mp4|m3u8)[^\s"'<>]*)/i);
+              return match ? match[1] : null;
+            }
           }
         ];
 
