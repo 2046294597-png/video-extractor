@@ -637,6 +637,39 @@
       padding: 4px;
       margin-left: -4px;
     }
+
+    .download-progress {
+      display: none;
+      padding: 0 16px 14px;
+    }
+
+    .download-progress.active {
+      display: block;
+    }
+
+    .download-progress-bar {
+      width: 100%;
+      height: 6px;
+      background: var(--border);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .download-progress-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--primary), #7c3aed);
+      border-radius: 3px;
+      transition: width 0.3s ease;
+    }
+
+    .download-progress-text {
+      font-size: 12px;
+      color: var(--text-secondary);
+      text-align: center;
+      margin-top: 6px;
+      font-variant-numeric: tabular-nums;
+    }
   </style>
 </head>
 <body>
@@ -696,6 +729,10 @@
         <button class="download-btn btn-share" id="shareBtn">
           📤 分享
         </button>
+      </div>
+      <div class="download-progress" id="downloadProgress">
+        <div class="download-progress-bar"><div class="download-progress-fill" id="downloadProgressFill"></div></div>
+        <div class="download-progress-text" id="downloadProgressText"></div>
       </div>
     </div>
 
@@ -766,12 +803,16 @@
       const historyList = document.getElementById('historyList');
       const historyClearBtn = document.getElementById('historyClearBtn');
       const toast = document.getElementById('toast');
+      const downloadProgress = document.getElementById('downloadProgress');
+      const downloadProgressFill = document.getElementById('downloadProgressFill');
+      const downloadProgressText = document.getElementById('downloadProgressText');
 
       let currentVideoUrl = null;
       let currentBlobUrl = null;
       let currentPlatform = null;
       let currentSourceUrl = null;
       let currentIsPrivateChannel = false;
+      let currentIsDownloaded = false;
       let toastTimer = null;
 
       const PLATFORM_CONFIG = {
@@ -1008,7 +1049,7 @@ video::-webkit-media-controls{display:flex!important}
         }
       }
 
-      async function fetchVideoAsBlob(videoUrl) {
+      async function fetchVideoAsBlob(videoUrl, onProgress) {
         const proxyFns = [
           (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
           (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
@@ -1016,11 +1057,27 @@ video::-webkit-media-controls{display:flex!important}
         for (const fn of proxyFns) {
           try {
             const ctrl = new AbortController();
-            const timer = setTimeout(() => ctrl.abort(), 25000);
+            const timer = setTimeout(() => ctrl.abort(), 60000);
             const resp = await fetch(fn(videoUrl), { signal: ctrl.signal });
             clearTimeout(timer);
             if (!resp.ok) continue;
-            const blob = await resp.blob();
+
+            const contentLength = parseInt(resp.headers.get('content-length') || '0');
+            if (onProgress && contentLength) onProgress(0, contentLength);
+
+            const reader = resp.body.getReader();
+            const chunks = [];
+            let received = 0;
+
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              chunks.push(value);
+              received += value.length;
+              if (onProgress && contentLength) onProgress(received, contentLength);
+            }
+
+            const blob = new Blob(chunks);
             if (blob.size > 1000) return blob;
           } catch { continue; }
         }
@@ -1507,13 +1564,43 @@ video::-webkit-media-controls{display:flex!important}
         }
       }
 
+      function formatSize(bytes) {
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + ' KB';
+        return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+      }
+
+      function showDownloadProgress(received, total) {
+        downloadProgress.classList.add('active');
+        const pct = Math.round((received / total) * 100);
+        downloadProgressFill.style.width = pct + '%';
+        downloadProgressText.textContent = formatSize(received) + ' / ' + formatSize(total) + ' (' + pct + '%)';
+      }
+
+      function hideDownloadProgress() {
+        downloadProgress.classList.remove('active');
+        downloadProgressFill.style.width = '0%';
+        downloadProgressText.textContent = '';
+      }
+
+      function triggerDownload(blob, filename) {
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = filename;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(blobUrl); }, 60000);
+        return true;
+      }
+
       async function downloadVideo() {
         if (!currentVideoUrl) return;
 
         if (currentIsPrivateChannel) {
           const rawUrl = currentSourceUrl.replace(/\/$/, '');
           if (isMobileDevice()) {
-            try { await navigator.clipboard.writeText(rawUrl); } catch { /* fallback */ }
+            try { await navigator.clipboard.writeText(rawUrl); } catch {}
             showToast('✅ 已复制！请粘贴到浏览器地址栏打开');
             return;
           }
@@ -1528,26 +1615,42 @@ video::-webkit-media-controls{display:flex!important}
           return;
         }
 
-        showToast('正在下载视频...');
+        showToast('正在下载...');
+        hideDownloadProgress();
+        const isMobile = isMobileDevice();
+
+        const ext = currentVideoUrl.match(/\.(mp4|mov|webm)($|\?)/i);
+        const fileExt = ext ? ext[1] : 'mp4';
+        const cfg = PLATFORM_CONFIG[currentPlatform] || { name: 'Video' };
+        const filename = `${cfg.name}_video_${Date.now()}.${fileExt}`;
+
         let blob = null;
 
         try {
-          blob = await fetchVideoAsBlob(currentVideoUrl);
-        } catch {}
+          blob = await fetchVideoAsBlob(currentVideoUrl, showDownloadProgress);
+        } catch { hideDownloadProgress(); }
+
+        hideDownloadProgress();
 
         if (blob && blob.size > 1000) {
-          const blobUrl = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = blobUrl;
-          const ext = currentVideoUrl.match(/\.(mp4|mov|webm)($|\?)/i);
-          const fileExt = ext ? ext[1] : 'mp4';
-          const cfg = PLATFORM_CONFIG[currentPlatform] || { name: 'Video' };
-          a.download = `${cfg.name}_video_${Date.now()}.${fileExt}`;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
-          showToast('✅ 下载成功！');
+          const downloadStarted = triggerDownload(blob, filename);
+
+          if (isMobile) {
+            setTimeout(() => {
+              window.open(currentVideoUrl, '_blank');
+              showToast('✅ 已保存！若未弹出请长按新窗口中的视频保存');
+            }, 800);
+            if (downloadStarted) showToast('✅ 下载完成！若未保存请长按弹出的视频');
+          } else {
+            showToast('✅ 下载完成！');
+          }
+          currentIsDownloaded = true;
+          return;
+        }
+
+        if (isMobile) {
+          window.open(currentVideoUrl, '_blank');
+          showToast('直链下载：请在弹出页面中长按视频保存');
           return;
         }
 
