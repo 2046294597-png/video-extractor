@@ -865,6 +865,9 @@
       let currentPlatform = null;
       let currentSourceUrl = null;
       let currentIsPrivateChannel = false;
+
+      // Cloudflare Worker endpoint (deploy with: npx wrangler deploy from /worker)
+      const WORKER_URL = "https://video-extractor-worker.YOUR_SUBDOMAIN.workers.dev";
       let currentIsDownloaded = false;
       let toastTimer = null;
 
@@ -1148,6 +1151,10 @@ video::-webkit-media-controls{display:flex!important}
         const proxyFns = [
           (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
           (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
+          (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+          (u) => `https://api.cors.lol/?url=${encodeURIComponent(u)}`,
+          (u) => `https://cors-anywhere.herokuapp.com/${u}`,
+          (u) => `https://thingproxy.freeboard.io/fetch/${u}`,
         ];
         for (const fn of proxyFns) {
           try {
@@ -1188,52 +1195,75 @@ video::-webkit-media-controls{display:flex!important}
       function tryParseTGHtml(html) {
         let videoUrl = null;
 
-        const vSrc = html.match(/<video[^>]+src=["']([^"']+)["'][^>]*>/i);
+        // 1. video tag src
+        const vSrc = html.match(/<video[^>]+src=["\'"]([^"\'"]+)["\'"][^>]*>/i);
         if (vSrc) videoUrl = vSrc[1];
 
+        // 2. data-video-src / data-video-url (Telegram embed)
         if (!videoUrl) {
-          const dataVideo = html.match(/data-video-src=["']([^"']+)["']/i)
-            || html.match(/data-video-url=["']([^"']+)["']/i);
+          const dataVideo = html.match(/data-video-src=["\'"]([^"\'"]+)["\'"]/i)
+            || html.match(/data-video-url=["\'"]([^"\'"]+)["\'"]/i);
           if (dataVideo) videoUrl = dataVideo[1];
         }
 
+        // 3. source tag
         if (!videoUrl) {
-          const sourceMatch = html.match(/<source[^>]+src=["']([^"']+)["'][^>]*>/i);
+          const sourceMatch = html.match(/<source[^>]+src=["\'"]([^"\'"]+)["\'"][^>]*>/i);
           if (sourceMatch) videoUrl = sourceMatch[1];
         }
 
+        // 4. og:video meta tags
         if (!videoUrl) {
-          const ogVideo = html.match(/<meta\s+property=["']og:video["'][^>]+content=["']([^"']+)["']/i)
-            || html.match(/<meta\s+property=["']og:video:url["'][^>]+content=["']([^"']+)["']/i)
-            || html.match(/<meta\s+property=["']og:video:secure_url["'][^>]+content=["']([^"']+)["']/i)
-            || html.match(/<meta\s+property=["']twitter:player:stream["'][^>]+content=["']([^"']+)["']/i);
+          const ogVideo = html.match(/<meta\s+property=["\'"]og:video["\'"][^>]+content=["\'"]([^"\'"]+)["\'"]/i)
+            || html.match(/<meta\s+property=["\'"]og:video:url["\'"][^>]+content=["\'"]([^"\'"]+)["\'"]/i)
+            || html.match(/<meta\s+property=["\'"]og:video:secure_url["\'"][^>]+content=["\'"]([^"\'"]+)["\'"]/i)
+            || html.match(/<meta\s+property=["\'"]twitter:player:stream["\'"][^>]+content=["\'"]([^"\'"]+)["\'"]/i);
           if (ogVideo) videoUrl = ogVideo[1];
         }
 
+        // 5. TG embed player params (tgme_player_params / videoData / playerData)
         if (!videoUrl) {
-          const jsonScript = html.match(/<script[^>]*>\s*(?:var|let|const)\s+(?:videoData|tgme_player_params|playerData)\s*=\s*(\{[\s\S]*?\});\s*<\/script>/i);
-          if (jsonScript) {
-            try {
-              const data = JSON.parse(jsonScript[1]);
-              videoUrl = data?.video?.src || data?.src || data?.url || data?.file || data?.video_url || null;
-            } catch {}
+          const scripts = html.match(/<script[^>]*>([\s\S]*?)<\/script>/gi);
+          if (scripts) {
+            for (const script of scripts) {
+              const jsonMatch = script.match(/(?:var|let|const|window\.)?\s*(?:tgme_player_params|videoData|playerData|tgmePlayerParams|playerParams)\s*=\s*(\{[\s\S]*?\})\s*;?/i);
+              if (jsonMatch) {
+                try {
+                  const data = JSON.parse(jsonMatch[1]);
+                  videoUrl = data?.video?.src || data?.video?.url || data?.src || data?.url || data?.file || data?.video_url || null;
+                  if (videoUrl) break;
+                } catch {}
+              }
+            }
           }
         }
 
+        // 6. Inline JSON with video src (various patterns)
         if (!videoUrl) {
           const anyJson = html.match(/"video"\s*:\s*\{[^}]*"src"\s*:\s*"([^"]+)"/)
             || html.match(/"src"\s*:\s*"(https?:\/\/[^"]*\.(?:mp4|webm)[^"]*)"/)
-            || html.match(/"url"\s*:\s*"(https?:\/\/[^"]*\.(?:mp4|webm)[^"]*)"/);
-          if (anyJson) videoUrl = anyJson[1].replace(/\\\//g, '/');
+            || html.match(/"url"\s*:\s*"(https?:\/\/[^"]*\.(?:mp4|webm)[^"]*)"/)
+            || html.match(/"video_url"\s*:\s*"(https?:\/\/[^"]+)"/)
+            || html.match(/"file"\s*:\s*"(https?:\/\/[^"]*\.mp4[^"]*)"/);
+          if (anyJson) videoUrl = anyJson[1].replace(/\\\//g, "/");
         }
 
+        // 7. Raw MP4/WebM/MOV URL in HTML
         if (!videoUrl) {
-          const rawMP4 = html.match(/(https?:\/\/[^\s"'<>]+\.(?:mp4|webm|mov))/i);
+          const rawMP4 = html.match(/(https?:\/\/[^\s"\'<>]+\.(?:mp4|webm|mov))/i);
           if (rawMP4) videoUrl = rawMP4[1];
+        }
+
+        // 8. Telegram CDN direct URLs
+        if (!videoUrl) {
+          const tgCDN = html.match(/https?:\/\/cdn\d?\.(?:telesco\.pe|telegram\.org)\/[^\s"\'<>]+\.(?:mp4|webm)/i)
+            || html.match(/https?:\/\/video\.(?:telesco\.pe|telegram\.org)\/[^\s"\'<>]+\.(?:mp4|webm)/i);
+          if (tgCDN) videoUrl = tgCDN[0];
         }
 
         return videoUrl;
       }
+
 
       async function fetchPageViaProxy(url) {
         const proxyFns = [
@@ -1241,6 +1271,9 @@ video::-webkit-media-controls{display:flex!important}
           (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
           (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
           (u) => `https://api.cors.lol/?url=${encodeURIComponent(u)}`,
+          (u) => `https://cors-anywhere.herokuapp.com/${u}`,
+          (u) => `https://thingproxy.freeboard.io/fetch/${u}`,
+          (u) => `https://api.allorigins.org/raw?url=${encodeURIComponent(u)}`,
         ];
 
         for (const fn of proxyFns) {
@@ -1259,26 +1292,56 @@ video::-webkit-media-controls{display:flex!important}
       }
 
       async function extractTelegramVideo(url) {
-        let cleanUrl = url.replace(/\?.*$/, '').replace(/\/$/, '');
+        let cleanUrl = url.replace(/\?.*$/, "").replace(/\/$/, "");
 
+        // --- Strategy A: Cloudflare Worker (most reliable) ---
+        if (WORKER_URL && !WORKER_URL.includes("YOUR_SUBDOMAIN")) {
+          try {
+            setStatus("Worker ...", "");
+            const workerResp = await fetch(WORKER_URL + "/extract", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ tgUrl: url }),
+              signal: AbortSignal.timeout(20000),
+            });
+            if (workerResp.ok) {
+              const data = await workerResp.json();
+              if (data.videoUrl) {
+                setStatus("Worker OK", "success");
+                return data.videoUrl;
+              }
+            }
+          } catch {}
+        }
+
+        // --- Strategy B: CORS proxy fallback (original) ---
+        setStatus("CORS ...", "");
         const pageVariants = [];
         if (/t\.me\/c\/\d+/.test(cleanUrl)) {
-          pageVariants.push(cleanUrl + '?embed=1');
-          pageVariants.push(cleanUrl + '?embed=1&mode=tme');
+          pageVariants.push(cleanUrl + "?embed=1&mode=tme");
+          pageVariants.push(cleanUrl + "?embed=1");
         } else {
-          pageVariants.push(cleanUrl.replace(/t\.me\//, 't.me/s/'));
-          pageVariants.push(cleanUrl + '?embed=1');
-          pageVariants.push(cleanUrl + '?embed=1&mode=tme');
+          pageVariants.push(cleanUrl.replace(/t\.me\//, "t.me/s/"));
+          pageVariants.push(cleanUrl + "?embed=1&mode=tme");
+          pageVariants.push(cleanUrl + "?embed=1");
+          pageVariants.push(cleanUrl.replace(/t\.me\//, "t.me/s/") + "?single");
         }
         pageVariants.push(cleanUrl);
-        if (url.includes('?') && url !== cleanUrl) {
-          pageVariants.push(url.replace(/\/$/, ''));
+        if (url.includes("?") && url !== cleanUrl) {
+          pageVariants.push(url.replace(/\/$/, ""));
         }
 
         for (const pageUrl of pageVariants) {
-          setStatus('正在获取 ' + pageUrl + ' ...', '');
-          const html = await fetchPageViaProxy(pageUrl);
-          if (!html) continue;
+          setStatus(" " + pageUrl + " ...", "");
+          let html = await fetchPageViaProxy(pageUrl);
+          if (!html) {
+            try {
+              setStatus(" ...", "");
+              const resp = await fetch(pageUrl);
+              if (resp.ok) html = await resp.text();
+            } catch {}
+          }
+          if (!html || html.length < 200) continue;
 
           if (detectNSFWBlocked(html)) {
             throw { nsfwBlocked: true, channelUrl: cleanUrl };
@@ -1286,18 +1349,22 @@ video::-webkit-media-controls{display:flex!important}
 
           const videoUrl = tryParseTGHtml(html);
           if (videoUrl) {
-            if (videoUrl.startsWith('//')) videoUrl = 'https:' + videoUrl;
-            if (videoUrl.startsWith('/')) {
-              const parsed = new URL(cleanUrl);
-              videoUrl = parsed.origin + videoUrl;
+            if (videoUrl.startsWith("//")) videoUrl = "https:" + videoUrl;
+            if (videoUrl.startsWith("/")) {
+              try {
+                const parsed = new URL(cleanUrl);
+                videoUrl = parsed.origin + videoUrl;
+              } catch {}
             }
-            videoUrl = videoUrl.replace(/^http:\/\//i, 'https://');
+            videoUrl = videoUrl.replace(/^http:\/\//i, "https://");
             return videoUrl;
           }
         }
 
-        throw new Error('未找到视频。请确认链接是公开频道的视频帖子');
+        throw new Error(" - WorkerCORS");
       }
+
+
 
       function pickBestVariant(variants) {
         if (!variants || !variants.length) return null;
@@ -1373,6 +1440,8 @@ video::-webkit-media-controls{display:flex!important}
           (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
           (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
           (u) => `https://api.cors.lol/?url=${encodeURIComponent(u)}`,
+          (u) => `https://cors-anywhere.herokuapp.com/${u}`,
+          (u) => `https://api.allorigins.org/raw?url=${encodeURIComponent(u)}`,
         ];
         for (const fn of proxyFns) {
           try {

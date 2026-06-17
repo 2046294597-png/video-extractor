@@ -1,4 +1,4 @@
-const CACHE_NAME = 'video-extractor-v4';
+const CACHE_NAME = 'video-extractor-v5';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(self.skipWaiting());

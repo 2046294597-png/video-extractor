@@ -1,0 +1,6 @@
+﻿name = "video-extractor-worker"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+# Free tier: 100,000 requests/day
+# Deploy with: npx wrangler deploy
