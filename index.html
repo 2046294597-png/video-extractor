@@ -867,14 +867,15 @@
       let currentIsPrivateChannel = false;
 
       // ===================== 后端配置 =====================
-      // Cloudflare Worker 地址：在 worker/ 目录执行 `npx wrangler deploy`，把拿到的
-      // 子域填到下面。也可以完全不改代码——浏览器控制台执行一次：
+      // Cloudflare Worker 地址：已部署在 videoextractor2046 账号下。
+      // 想临时换后端不必改代码——浏览器控制台执行一次：
       //   localStorage.setItem('ve_worker_url', 'https://你的子域.workers.dev')
-      // 刷新即生效。Worker 在服务端直连 t.me / twimg / syndication，绕开浏览器 CORS，
-      // 是整个应用能否稳定工作的关键。
+      // 刷新即生效（localStorage.removeItem('ve_worker_url') 回落到下面的默认值）。
+      // Worker 在服务端直连 t.me / twimg / syndication，绕开浏览器 CORS，
+      // 是整个应用能否稳定工作的关键。重新部署：cd worker && npx wrangler deploy
       const WORKER_URL = (
         localStorage.getItem('ve_worker_url') ||
-        "https://video-extractor-worker.YOUR_SUBDOMAIN.workers.dev"
+        'https://video-extractor-worker.videoextractor2046.workers.dev'
       )
         .trim()
         .replace(/\/+$/, '');

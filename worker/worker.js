@@ -66,7 +66,8 @@ export default {
         }
         return json({ videoUrl: result.videoUrl, source: result.source }, 200);
       } catch (e) {
-        return json({ error: e && e.message ? e.message : 'Extraction failed' }, 500);
+        const status = (e && e.status) || 500;
+        return json({ error: e && e.message ? e.message : 'Extraction failed' }, status);
       }
     }
 
@@ -156,39 +157,57 @@ async function extractTelegramVideo(url) {
 
   // t.me/c/<internalId>/<msgId> 是私有频道，必须登录，直接给明确错误
   if (/t\.me\/c\/\d+\/\d+/.test(cleanUrl)) {
-    throw new Error('Private channels require login. Open in browser instead.');
+    throw httpError('Private channels require login. Open in browser instead.', 400);
   }
 
-  const match = cleanUrl.match(/t\.me\/([^/]+)\/(\d+)/);
-  if (!match) throw new Error('Invalid Telegram URL format');
+  // t.me/<channel>、t.me/<channel>/<id>、t.me/s/<channel>[/<id>] 都接受
+  const match = cleanUrl.match(/t\.me\/(?:s\/)?([A-Za-z0-9_]{3,})(?:\/(\d+))?/);
+  if (!match) throw httpError('Invalid Telegram URL format', 400);
 
   const channel = match[1];
-  const messageId = match[2];
+  const messageId = match[2] || null;
 
-  const strategies = [
-    { url: `https://t.me/s/${channel}/${messageId}`, source: 't.me/s/' },
-    { url: `${cleanUrl}?embed=1&mode=tme`, source: 'embed' },
-    { url: `${cleanUrl}?embed=1`, source: 'embed2' },
-  ];
+  // 只给了频道名没给消息 ID：取频道里最新的一条视频，这是用户的合理预期
+  const strategies = messageId
+    ? [
+        { url: `https://t.me/s/${channel}/${messageId}`, source: 't.me/s/' },
+        { url: `${cleanUrl}?embed=1&mode=tme`, source: 'embed' },
+        { url: `${cleanUrl}?embed=1`, source: 'embed2' },
+      ]
+    : [{ url: `https://t.me/s/${channel}`, source: 'channel' }];
+
+  // 总预算：策略串行，每个再叠加 25 秒超时和重试会拖到几分钟，客户端早断开了
+  const deadline = Date.now() + 25000;
 
   for (const s of strategies) {
-    const html = await fetchHtml(s.url);
+    const remaining = deadline - Date.now();
+    if (remaining < 2000) break;
+    const html = await fetchHtml(s.url, remaining);
     if (!html) continue;
     const videoUrl = parseHTMLForVideo(html, s.url);
     if (videoUrl) return { videoUrl, source: s.source };
   }
 
-  // 最后兜底：抓频道整页，定位到目标消息那一段再解析
-  const feed = await fetchHtml(`https://t.me/s/${channel}`);
-  if (feed) {
-    const videoUrl = parseFeedHTMLForVideo(feed, messageId);
-    if (videoUrl) return { videoUrl, source: 'feed' };
+  // 指定了消息 ID 却没在单页里找到：抓频道整页，定位到目标消息那一段再解析
+  if (messageId && Date.now() < deadline) {
+    const feed = await fetchHtml(`https://t.me/s/${channel}`, deadline - Date.now());
+    if (feed) {
+      const videoUrl = parseFeedHTMLForVideo(feed, messageId);
+      if (videoUrl) return { videoUrl, source: 'feed' };
+    }
   }
 
   return null;
 }
 
-async function fetchHtml(url) {
+function httpError(message, status) {
+  const err = new Error(message);
+  err.status = status;
+  return err;
+}
+
+async function fetchHtml(url, timeoutMs = UPSTREAM_TIMEOUT_MS) {
+  const perAttempt = Math.max(3000, Math.min(UPSTREAM_TIMEOUT_MS, timeoutMs | 0));
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const resp = await fetch(url, {
@@ -198,7 +217,7 @@ async function fetchHtml(url) {
           'Accept-Language': 'en-US,en;q=0.9',
         },
         redirect: 'follow',
-        signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+        signal: AbortSignal.timeout(perAttempt),
       });
       if (!resp.ok) continue;
       const text = await resp.text();
