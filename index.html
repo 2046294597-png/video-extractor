@@ -719,7 +719,7 @@
   <div class="app-container">
     <header class="header">
       <div class="logo">🎬</div>
-      <h1>视频提取器 <span style="font-size:11px;color:#64748b;font-weight:400;">v12</span></h1>
+      <h1>视频提取器 <span style="font-size:11px;color:#64748b;font-weight:400;">v13</span></h1>
       <p class="subtitle">支持 Telegram · Twitter / X 视频下载</p>
       <div class="platform-badges">
         <span class="platform-badge badge-tg">✈️ Telegram</span>
@@ -1331,6 +1331,50 @@ video::-webkit-media-controls{display:flex!important}
         });
       }
 
+      // ===================== 大文件下载（不占内存）=====================
+      // 1GB 的视频走上面那条路要两份 1GB 同时驻留内存，手机上必被系统杀掉。
+      // 超过阈值的文件改走 Service Worker 流式转发：页面跳到
+      // /__download?url=...&name=...，SW 把 CDN 的响应体直接管道给浏览器的
+      // 下载管理器，全程不经过 JS 内存，多大都行，还支持断点续传。
+      const STREAM_THRESHOLD_BYTES = 80 * 1024 * 1024;
+      const STREAM_ENDPOINT = './__download';
+
+      function swControlsPage() {
+        return !!(navigator.serviceWorker && navigator.serviceWorker.controller);
+      }
+
+      // 直接 HEAD 问大小。telesco.pe / twimg.com 都带 ACAO:*，不需要走代理。
+      async function headContentLength(url) {
+        try {
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 8000);
+          const resp = await fetch(url, { method: 'HEAD', signal: ctrl.signal });
+          clearTimeout(timer);
+          if (!resp.ok) return 0;
+          return parseInt(resp.headers.get('content-length') || '0', 10) || 0;
+        } catch {
+          return 0;
+        }
+      }
+
+      function streamDownload(url, filename) {
+        const name = filename || 'video.mp4';
+        const target =
+          STREAM_ENDPOINT +
+          '?url=' + encodeURIComponent(url) +
+          '&name=' + encodeURIComponent(name);
+        const a = document.createElement('a');
+        a.href = target;
+        a.download = name;
+        a.rel = 'noopener';
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+          if (a.parentNode) a.parentNode.removeChild(a);
+        }, 30000);
+      }
+
       function detectNSFWBlocked(html) {
         return /pornographic\s*content/i.test(html)
           || /can['\u2019]t\s+be\s+displayed/i.test(html)
@@ -1923,6 +1967,18 @@ video::-webkit-media-controls{display:flex!important}
         const cfg = PLATFORM_CONFIG[currentPlatform] || { name: 'Video' };
         const filename = `${cfg.name}_video_${Date.now()}.${fileExt}`;
 
+        // 先问大小：大文件直接交给浏览器下载，绝不用 Blob 进内存
+        if (swControlsPage()) {
+          const size = await headContentLength(url);
+          if (size > STREAM_THRESHOLD_BYTES) {
+            hideDownloadProgress();
+            streamDownload(url, filename);
+            showToast(`文件 ${(size / 1048576).toFixed(0)} MB，已交给浏览器下载`);
+            currentIsDownloaded = true;
+            return;
+          }
+        }
+
         let blob = null;
 
         try {
@@ -1939,6 +1995,15 @@ video::-webkit-media-controls{display:flex!important}
           } else {
             showToast('✅ 下载完成！');
           }
+          currentIsDownloaded = true;
+          return;
+        }
+
+        // Blob 这条路失败（超限 / 超时 / 代理挂）：仍然交给浏览器，
+        // 不要让用户看到「下载失败」——走流式转发一样能存下来
+        if (swControlsPage()) {
+          streamDownload(url, filename);
+          showToast('已改用浏览器直接下载');
           currentIsDownloaded = true;
           return;
         }
