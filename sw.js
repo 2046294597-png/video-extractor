@@ -16,7 +16,17 @@ function hostAllowed(hostname) {
 }
 
 function sanitizeFilename(name) {
-  return (name || 'video.mp4').replace(/[\\"\r\n\t]/g, '_').slice(0, 120);
+  return (name || 'video.mp4')
+    .replace(/[\\/:*?"<>|\r\n\t]/g, '_')   // Windows / header 都不允许这些
+    .replace(/[\x00-\x1f\x7f]/g, '')
+    .slice(0, 120) || 'video.mp4';
+}
+
+// 中文文件名不能直接塞进 header（非 Latin-1 会让 Headers.set 抛 TypeError），
+// 按 RFC 5987 用 filename* 传 UTF-8，同时留一个纯 ASCII 的 filename 兜底
+function contentDisposition(name) {
+  const ascii = name.replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_');
+  return 'attachment; filename="' + ascii + '"; filename*=UTF-8\'\'' + encodeURIComponent(name);
 }
 
 async function handleDownload(url, req) {
@@ -55,7 +65,7 @@ async function handleDownload(url, req) {
 
   const headers = new Headers();
   headers.set('Content-Type', upstream.headers.get('content-type') || 'application/octet-stream');
-  headers.set('Content-Disposition', 'attachment; filename="' + filename + '"');
+  headers.set('Content-Disposition', contentDisposition(filename));
   headers.set('Accept-Ranges', 'bytes');
   headers.set('Cache-Control', 'no-store');
 
