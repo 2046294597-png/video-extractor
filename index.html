@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
@@ -719,7 +719,7 @@
   <div class="app-container">
     <header class="header">
       <div class="logo">🎬</div>
-      <h1>视频提取器 <span style="font-size:11px;color:#64748b;font-weight:400;">v15</span></h1>
+      <h1>视频提取器 <span style="font-size:11px;color:#64748b;font-weight:400;">v16</span></h1>
       <p class="subtitle">支持 Telegram · Twitter / X 视频下载</p>
       <div class="platform-badges">
         <span class="platform-badge badge-tg">✈️ Telegram</span>
@@ -2024,8 +2024,18 @@ video::-webkit-media-controls{display:flex!important}
           return '拿到 ' + html.length + ' 字符';
         });
 
-        await probe('Twitter 接口', async (signal) => {
-          const resp = await fetch('https://api.fxtwitter.com/status/1', { signal });
+        // Twitter 解析本来就有「直连 fxtwitter」和「经后端」两条路，
+        // 直连失败不代表解析不了，所以两项分开报。
+        const twProbe = 'https://api.fxtwitter.com/status/2115886086107148719';
+
+        await probe('Twitter 接口（直连）', async (signal) => {
+          const resp = await fetch(twProbe, { signal });
+          return 'HTTP ' + resp.status;
+        });
+
+        await probe('Twitter 接口（经后端）', async (signal) => {
+          if (!HAS_WORKER) throw new Error('未配置后端地址');
+          const resp = await fetch(workerProxyUrl(twProbe), { signal });
           return 'HTTP ' + resp.status;
         });
 

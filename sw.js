@@ -1,4 +1,4 @@
-const CACHE_NAME = 'video-extractor-v15';
+﻿const CACHE_NAME = 'video-extractor-v16';
 const PRECACHE = ['./', './index.html', './manifest.json'];
 
 // ===================== 大文件流式下载 =====================
