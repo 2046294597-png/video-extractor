@@ -719,7 +719,7 @@
   <div class="app-container">
     <header class="header">
       <div class="logo">🎬</div>
-      <h1>视频提取器 <span style="font-size:11px;color:#64748b;font-weight:400;">v11</span></h1>
+      <h1>视频提取器 <span style="font-size:11px;color:#64748b;font-weight:400;">v12</span></h1>
       <p class="subtitle">支持 Telegram · Twitter / X 视频下载</p>
       <div class="platform-badges">
         <span class="platform-badge badge-tg">✈️ Telegram</span>
@@ -866,8 +866,141 @@
       let currentSourceUrl = null;
       let currentIsPrivateChannel = false;
 
-      // Cloudflare Worker endpoint (deploy with: npx wrangler deploy from /worker)
-      const WORKER_URL = "https://video-extractor-worker.YOUR_SUBDOMAIN.workers.dev";
+      // ===================== 后端配置 =====================
+      // Cloudflare Worker 地址：在 worker/ 目录执行 `npx wrangler deploy`，把拿到的
+      // 子域填到下面。也可以完全不改代码——浏览器控制台执行一次：
+      //   localStorage.setItem('ve_worker_url', 'https://你的子域.workers.dev')
+      // 刷新即生效。Worker 在服务端直连 t.me / twimg / syndication，绕开浏览器 CORS，
+      // 是整个应用能否稳定工作的关键。
+      const WORKER_URL = (
+        localStorage.getItem('ve_worker_url') ||
+        "https://video-extractor-worker.YOUR_SUBDOMAIN.workers.dev"
+      )
+        .trim()
+        .replace(/\/+$/, '');
+      const HAS_WORKER = !!WORKER_URL && !WORKER_URL.includes('YOUR_SUBDOMAIN');
+
+      // 公共 CORS 代理兜底——只在 Worker 未配置时才用。
+      // 下列代理已实测失效，故从代码中移除：
+      //   api.allorigins.win → HTTP 522（源站不可达，且原本排在每个列表第一位，白等 19 秒）
+      //   api.allorigins.org → 域名不存在
+      //   thingproxy.freeboard.io → 连接被关闭
+      //   cors-anywhere.herokuapp.com → 403，该服务需逐站手动申请临时授权
+      //   corsproxy.io 的旧格式 `?<url>` → 403，新格式必须写成 `?url=`
+      const PROXIES = [
+        (u) => 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u),
+        (u) => 'https://corsproxy.io/?url=' + encodeURIComponent(u),
+        (u) => 'https://api.cors.lol/?url=' + encodeURIComponent(u),
+      ];
+
+      function proxyBuilders() {
+        const list = [];
+        if (HAS_WORKER) list.push((u) => WORKER_URL + '/proxy?url=' + encodeURIComponent(u));
+        return list.concat(PROXIES);
+      }
+
+      // 统一抓取入口：Worker 优先 → 公共代理 → 全失败返回 null。
+      // accept(resp) 返回非 null 表示接受这次响应（可顺势消费 body）；返回 null 则换下一个代理。
+      async function fetchWithProxies(targetUrl, { timeout = 20000, signal = null, accept = null } = {}) {
+        for (const build of proxyBuilders()) {
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), timeout);
+          const onOuterAbort = () => ctrl.abort();
+          if (signal) signal.addEventListener('abort', onOuterAbort, { once: true });
+          try {
+            const resp = await fetch(build(targetUrl), { signal: ctrl.signal });
+            if (!resp.ok) continue;
+            if (!accept) return resp;
+            const accepted = await accept(resp);
+            if (accepted !== null && accepted !== undefined) return accepted;
+          } catch {
+            // 这个代理不行，换下一个
+          } finally {
+            clearTimeout(timer);
+            if (signal) signal.removeEventListener('abort', onOuterAbort);
+          }
+        }
+        return null;
+      }
+
+      function fetchText(targetUrl, opts = {}) {
+        return fetchWithProxies(targetUrl, {
+          ...opts,
+          accept: async (resp) => {
+            const text = await resp.text();
+            return text && text.length > 200 ? text : null;
+          }
+        });
+      }
+
+      function fetchJson(targetUrl, opts = {}) {
+        return fetchWithProxies(targetUrl, {
+          ...opts,
+          accept: async (resp) => {
+            const text = await resp.text();
+            if (!text || text.length < 2) return null;
+            try {
+              const data = JSON.parse(text);
+              return data && typeof data === 'object' ? data : null;
+            } catch {
+              return null;
+            }
+          }
+        });
+      }
+
+      // 直连拉 JSON（不经过任何代理），用于本身就对 CORS 开放的接口，最快
+      async function fetchJsonDirect(targetUrl, { timeout = 8000, signal = null } = {}) {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), timeout);
+        const onOuterAbort = () => ctrl.abort();
+        if (signal) signal.addEventListener('abort', onOuterAbort, { once: true });
+        try {
+          const resp = await fetch(targetUrl, { signal: ctrl.signal });
+          if (!resp.ok) return null;
+          return await resp.json();
+        } catch {
+          return null;
+        } finally {
+          clearTimeout(timer);
+          if (signal) signal.removeEventListener('abort', onOuterAbort);
+        }
+      }
+
+      // 多源并发竞速：谁先返回有效结果就用谁，其余立刻中断。
+      // 原来 9 个源串行试，全失败要 2~5 分钟。
+      function raceFirst(tasks, budgetMs = 20000) {
+        return new Promise((resolve) => {
+          if (!tasks || !tasks.length) return resolve(null);
+          const ctrl = new AbortController();
+          let pending = tasks.length;
+          let settled = false;
+
+          const finish = (winner) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            try { ctrl.abort(); } catch {}
+            resolve(winner);
+          };
+
+          const timer = setTimeout(() => finish(null), budgetMs);
+
+          for (const task of tasks) {
+            Promise.resolve()
+              .then(() => task.fn(ctrl.signal))
+              .then((urls) => {
+                if (urls && urls.length) finish({ name: task.name, urls });
+              })
+              .catch(() => {})
+              .finally(() => {
+                pending -= 1;
+                if (pending === 0) finish(null);
+              });
+          }
+        });
+      }
+
       let currentIsDownloaded = false;
       let toastTimer = null;
 
@@ -1071,6 +1204,17 @@
         return div.innerHTML;
       }
 
+      // 属性值专用：div.innerHTML 只转义 & < >，不转义引号，
+      // 直接拼进 value="..." / href="..." 会被一个 " 闭合掉（XSS）。
+      function escapeAttr(str) {
+        return String(str == null ? '' : str)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
       function buildIframeHTML(videoUrl) {
         return `<!DOCTYPE html>
 <html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer">
@@ -1147,24 +1291,21 @@ video::-webkit-media-controls{display:flex!important}
         }
       }
 
-      async function fetchVideoAsBlob(videoUrl, onProgress) {
-        const proxyFns = [
-          (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-          (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
-          (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
-          (u) => `https://api.cors.lol/?url=${encodeURIComponent(u)}`,
-          (u) => `https://cors-anywhere.herokuapp.com/${u}`,
-          (u) => `https://thingproxy.freeboard.io/fetch/${u}`,
-        ];
-        for (const fn of proxyFns) {
-          try {
-            const ctrl = new AbortController();
-            const timer = setTimeout(() => ctrl.abort(), 60000);
-            const resp = await fetch(fn(videoUrl), { signal: ctrl.signal });
-            clearTimeout(timer);
-            if (!resp.ok) continue;
+      // 下载硬上限：超过就放弃 Blob 方案，避免手机内存被打爆
+      const MAX_DOWNLOAD_BYTES = 300 * 1024 * 1024;
 
-            const contentLength = parseInt(resp.headers.get('content-length') || '0');
+      async function fetchVideoAsBlob(videoUrl, onProgress) {
+        return fetchWithProxies(videoUrl, {
+          timeout: 90000,
+          accept: async (resp) => {
+            const contentType = (resp.headers.get('content-type') || '').toLowerCase();
+            // 代理返回 HTML 说明是错误页 / 拦截页，不是视频
+            if (contentType.includes('text/html')) return null;
+
+            const contentLength = parseInt(resp.headers.get('content-length') || '0', 10);
+            if (contentLength > MAX_DOWNLOAD_BYTES) return null;
+            if (!resp.body) return null;
+
             if (onProgress && contentLength) onProgress(0, contentLength);
 
             const reader = resp.body.getReader();
@@ -1174,16 +1315,19 @@ video::-webkit-media-controls{display:flex!important}
             while (true) {
               const { done, value } = await reader.read();
               if (done) break;
-              chunks.push(value);
               received += value.length;
+              if (received > MAX_DOWNLOAD_BYTES) {
+                try { await reader.cancel(); } catch {}
+                return null;
+              }
+              chunks.push(value);
               if (onProgress && contentLength) onProgress(received, contentLength);
             }
 
-            const blob = new Blob(chunks);
-            if (blob.size > 1000) return blob;
-          } catch { continue; }
-        }
-        return null;
+            const blob = new Blob(chunks, { type: contentType || 'video/mp4' });
+            return blob.size > 1000 ? blob : null;
+          }
+        });
       }
 
       function detectNSFWBlocked(html) {
@@ -1265,114 +1409,107 @@ video::-webkit-media-controls{display:flex!important}
       }
 
 
-      async function fetchPageViaProxy(url) {
-        const proxyFns = [
-          (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-          (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
-          (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
-          (u) => `https://api.cors.lol/?url=${encodeURIComponent(u)}`,
-          (u) => `https://cors-anywhere.herokuapp.com/${u}`,
-          (u) => `https://thingproxy.freeboard.io/fetch/${u}`,
-          (u) => `https://api.allorigins.org/raw?url=${encodeURIComponent(u)}`,
-        ];
-
-        for (const fn of proxyFns) {
-          try {
-            const ctrl = new AbortController();
-            const timer = setTimeout(() => ctrl.abort(), 15000);
-            const resp = await fetch(fn(url), { signal: ctrl.signal });
-            clearTimeout(timer);
-            if (!resp.ok) continue;
-            const text = await resp.text();
-            if (text.length > 200) return text;
-          } catch { continue; }
-        }
-
-        return null;
+      function fetchPageViaProxy(url, timeout = 15000) {
+        return fetchText(url, { timeout });
       }
 
-      async function extractTelegramVideo(url) {
-        let cleanUrl = url.replace(/\?.*$/, "").replace(/\/$/, "");
+      // Telegram 提取总预算：以前 5 个页面变体 × 7 个代理 × 15 秒串行，最坏要几分钟
+      const TG_BUDGET_MS = 30000;
 
-        // --- Strategy A: Cloudflare Worker (most reliable) ---
-        if (WORKER_URL && !WORKER_URL.includes("YOUR_SUBDOMAIN")) {
+      async function extractTelegramVideo(url) {
+        const cleanUrl = url.replace(/\?.*$/, '').replace(/\/$/, '');
+
+        // --- 策略 A：Cloudflare Worker 服务端直连（最可靠）---
+        if (HAS_WORKER) {
           try {
-            setStatus("Worker ...", "");
-            const workerResp = await fetch(WORKER_URL + "/extract", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
+            setStatus('正在通过后端解析...', '');
+            const workerResp = await fetch(WORKER_URL + '/extract', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ tgUrl: url }),
               signal: AbortSignal.timeout(20000),
             });
             if (workerResp.ok) {
               const data = await workerResp.json();
               if (data.videoUrl) {
-                setStatus("Worker OK", "success");
-                return data.videoUrl;
+                setStatus('✅ 解析成功（后端）', 'success');
+                return data.videoUrl.replace(/^http:\/\//i, 'https://');
               }
             }
-          } catch {}
+          } catch {
+            // 后端不可用，继续走本地代理
+          }
         }
 
-        // --- Strategy B: CORS proxy fallback (original) ---
-        setStatus("CORS ...", "");
+        // --- 策略 B：经代理抓页面后本地解析 ---
+        setStatus('正在通过代理解析...', '');
+
         const pageVariants = [];
         if (/t\.me\/c\/\d+/.test(cleanUrl)) {
-          pageVariants.push(cleanUrl + "?embed=1&mode=tme");
-          pageVariants.push(cleanUrl + "?embed=1");
+          pageVariants.push(cleanUrl + '?embed=1&mode=tme');
+          pageVariants.push(cleanUrl + '?embed=1');
         } else {
-          pageVariants.push(cleanUrl.replace(/t\.me\//, "t.me/s/"));
-          pageVariants.push(cleanUrl + "?embed=1&mode=tme");
-          pageVariants.push(cleanUrl + "?embed=1");
-          pageVariants.push(cleanUrl.replace(/t\.me\//, "t.me/s/") + "?single");
-        }
-        pageVariants.push(cleanUrl);
-        if (url.includes("?") && url !== cleanUrl) {
-          pageVariants.push(url.replace(/\/$/, ""));
+          // t.me/s/ 端点实测有 13 个 <video> 标签，最可靠，放第一个
+          pageVariants.push(cleanUrl.replace(/t\.me\//, 't.me/s/'));
+          pageVariants.push(cleanUrl + '?embed=1&mode=tme');
+          pageVariants.push(cleanUrl + '?embed=1');
+          pageVariants.push(cleanUrl);
         }
 
+        const deadline = Date.now() + TG_BUDGET_MS;
+
         for (const pageUrl of pageVariants) {
-          setStatus(" " + pageUrl + " ...", "");
-          let html = await fetchPageViaProxy(pageUrl);
-          if (!html) {
-            try {
-              setStatus(" ...", "");
-              const resp = await fetch(pageUrl);
-              if (resp.ok) html = await resp.text();
-            } catch {}
-          }
-          if (!html || html.length < 200) continue;
+          const remaining = deadline - Date.now();
+          if (remaining <= 1000) break;
+
+          setStatus('正在尝试 ' + pageUrl + ' ...', '');
+          const html = await fetchPageViaProxy(pageUrl, Math.min(15000, remaining));
+          if (!html) continue;
 
           if (detectNSFWBlocked(html)) {
             throw { nsfwBlocked: true, channelUrl: cleanUrl };
           }
 
-          const videoUrl = tryParseTGHtml(html);
+          let videoUrl = tryParseTGHtml(html);
           if (videoUrl) {
-            if (videoUrl.startsWith("//")) videoUrl = "https:" + videoUrl;
-            if (videoUrl.startsWith("/")) {
+            if (videoUrl.startsWith('//')) videoUrl = 'https:' + videoUrl;
+            if (videoUrl.startsWith('/')) {
               try {
-                const parsed = new URL(cleanUrl);
-                videoUrl = parsed.origin + videoUrl;
+                videoUrl = new URL(cleanUrl).origin + videoUrl;
               } catch {}
             }
-            videoUrl = videoUrl.replace(/^http:\/\//i, "https://");
-            return videoUrl;
+            return videoUrl.replace(/^http:\/\//i, 'https://');
           }
         }
 
-        throw new Error(" - WorkerCORS");
+        throw new Error('解析失败：后端起不来，公共代理也都被拦截了。请稍后重试，或直接点「在 Telegram 中打开」。');
       }
 
 
 
+      // 码率上限：以前专挑最高码率，4K 25 Mbps 的整段读进内存做 Blob，手机上必 OOM。
+      // 4.5 Mbps 大约是 720p 的量级，清晰度够用、体积友好。
+      // 想要原画可以在控制台执行 localStorage.setItem('ve_max_bitrate', '0') 关掉上限。
+      function maxBitrate() {
+        const raw = localStorage.getItem('ve_max_bitrate');
+        if (raw === '0') return Infinity;
+        const n = parseInt(raw, 10);
+        return n > 0 ? n : 4500000;
+      }
+
       function pickBestVariant(variants) {
         if (!variants || !variants.length) return null;
-        const mp4Variants = variants
-          .filter(v => (v.type === 'video/mp4' || (v.url && v.url.includes('.mp4'))) && v.bitrate)
-          .sort((a, b) => (parseInt(b.bitrate) || 0) - (parseInt(a.bitrate) || 0));
-        if (mp4Variants.length > 0) return mp4Variants[0].url;
-        return variants[variants.length - 1].url;
+
+        const mp4 = variants
+          .map((v) => ({ url: v.url, bitrate: parseInt(v.bitrate, 10) || 0 }))
+          .filter((v) => v.url && /\.mp4(\?|$)/i.test(v.url));
+        if (!mp4.length) return null; // 只剩 m3u8：交给调用方用 v.url 兜底，别把流地址当下载地址
+
+        mp4.sort((a, b) => a.bitrate - b.bitrate);
+        const cap = maxBitrate();
+        const underCap = mp4.filter((v) => v.bitrate > 0 && v.bitrate <= cap);
+        if (underCap.length) return underCap[underCap.length - 1].url; // 上限以内最高的
+        return mp4[mp4.length - 1].url; // 全超上限就退到最低的 mp4
       }
 
       function parseFxTwitterAll(data) {
@@ -1403,131 +1540,21 @@ video::-webkit-media-controls{display:flex!important}
         }).filter(Boolean);
       }
 
-      async function tryFetchJson(apiUrl, errorMsg) {
-        try {
-          const response = await fetch(apiUrl);
-          if (!response.ok) return null;
-          return await response.json();
-        } catch { return null; }
+      // syndication 的 tweet-result 接口必须带 token，否则只返回一个 `{}`
+      // （实测：无 token → len=2 的 `{}`；带 token → 2907 字节完整 JSON）。
+      // 且它只允许 platform.twitter.com 跨域，所以只能经后端/代理访问。
+      const SYNDICATION_TOKEN = 'a';
+
+      function syndicationUrl(tweetId) {
+        return `https://cdn.syndication.twimg.com/tweet-result?id=${tweetId}&lang=en&token=${SYNDICATION_TOKEN}`;
       }
 
-      async function tryFetchViaProxy(apiUrl) {
-        const proxies = [
-          (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-          (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
-          (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
-          (u) => `https://api.cors.lol/?url=${encodeURIComponent(u)}`,
-        ];
-        for (const proxyFn of proxies) {
-          try {
-            const ctrl = new AbortController();
-            const timer = setTimeout(() => ctrl.abort(), 15000);
-            const resp = await fetch(proxyFn(apiUrl), { signal: ctrl.signal });
-            clearTimeout(timer);
-            if (resp.ok) {
-              const text = await resp.text();
-              try { return JSON.parse(text); } catch { continue; }
-            }
-          } catch { continue; }
-        }
-        return null;
-      }
-
-      async function tryExtractViaTwitsave(tweetId) {
-        const twitsaveUrl = `https://twitsave.com/info?url=https://x.com/i/status/${tweetId}`;
-        const proxyFns = [
-          (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-          (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
-          (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
-          (u) => `https://api.cors.lol/?url=${encodeURIComponent(u)}`,
-          (u) => `https://cors-anywhere.herokuapp.com/${u}`,
-          (u) => `https://api.allorigins.org/raw?url=${encodeURIComponent(u)}`,
-        ];
-        for (const fn of proxyFns) {
-          try {
-            const ctrl = new AbortController();
-            const timer = setTimeout(() => ctrl.abort(), 15000);
-            const resp = await fetch(fn(twitsaveUrl), {
-              signal: ctrl.signal,
-              headers: { 'Accept': 'text/html' }
-            });
-            clearTimeout(timer);
-            if (!resp.ok) continue;
-            const html = await resp.text();
-            const jsonMatch = html.match(/<script[^>]*>\s*window\.__NUXT__\s*=\s*(\{.*?\});\s*<\/script>/s);
-            if (jsonMatch) {
-              const data = JSON.parse(jsonMatch[1]);
-              const downloads = data?.data?.[0]?.downloads || [];
-              const mp4 = downloads.find(d => d.type === 'video/mp4' && d.quality === 'HD')
-                || downloads.find(d => d.type === 'video/mp4')
-                || downloads[0];
-              if (mp4?.url) return mp4.url;
-            }
-            const directMatch = html.match(/https?:\/\/[^\s"'<>]+\.(?:mp4|mov)(\?[^\s"'<>]*)?/gi);
-            if (directMatch) {
-              const best = directMatch.find(u => u.includes('twimg') || u.includes('video'))
-                || directMatch[0];
-              if (best) return best;
-            }
-          } catch { continue; }
-        }
-        return null;
-      }
-
-      async function tryExtractViaNitter(tweetId) {
-        const nitterInstances = [
-          'https://nitter.net',
-          'https://nitter.poast.org',
-          'https://nitter.privacydev.net',
-        ];
-        for (const base of nitterInstances) {
-          try {
-            const url = `${base}/i/status/${tweetId}`;
-            const html = await fetchPageViaProxy(url);
-            if (!html) continue;
-
-            const videoIds = [];
-            const thumbRegex = /amplify_video_thumb(?:%2F|\/)(\d+)(?:%2F|\/)img(?:%2F|\/)([^"'\s?&.]+)/gi;
-            let m;
-            while ((m = thumbRegex.exec(html)) !== null) {
-              const id = m[1];
-              const name = m[2];
-              if (!videoIds.some(v => v.id === id)) {
-                videoIds.push({ id, name });
-              }
-            }
-
-            if (!videoIds.length) {
-              const extTwRegex = /ext_tw_video(?:%2F|\/)(\d+)(?:%2F|\/)pu(?:%2F|\/)vid(?:%2F|\/)avc1(?:%2F|\/)[^"'\s]*?([^"'\s/]+)\.mp4/gi;
-              while ((m = extTwRegex.exec(html)) !== null) {
-                const fullUrl = m[0].replace(/%2F/g, '/');
-                if (!videoIds.some(v => v.url === fullUrl)) {
-                  videoIds.push({ url: 'https://video.twimg.com/' + fullUrl });
-                }
-              }
-              if (videoIds.length) return videoIds.map(v => v.url);
-            }
-
-            if (!videoIds.length) {
-              const anyVideo = html.match(/https?:\/\/video\.twimg\.com\/[^\s"'<>]+\.mp4[^\s"'<>]*/gi);
-              if (anyVideo) return [...new Set(anyVideo)];
-            }
-
-            if (!videoIds.length) continue;
-
-            const urls = [];
-            const resolutions = ['720x1280', '1280x720', '640x1136', '320x568'];
-            for (const v of videoIds) {
-              for (const res of resolutions) {
-                urls.push(`https://video.twimg.com/amplify_video/${v.id}/vid/avc1/${res}/${v.name}.mp4?tag=21`);
-              }
-              urls.push(`https://video.twimg.com/ext_tw_video/${v.id}/pu/vid/avc1/720x1280/${v.name}.mp4?tag=12`);
-            }
-            return urls;
-          } catch { continue; }
-        }
-        return [];
-      }
+      // 已删除的失效解析源（实测证据，删除避免白等 2~5 分钟）：
+      //   twitsave               —— 页面早就不含 window.__NUXT__，downloads / mp4 也都是 0 次命中
+      //   platform.twitter.com   —— /embed/Tweet.html 只返回 429 字节的 <div id="app"></div> JS 壳
+      //   Nitter（3 个实例）      —— nitter.net 已退役成落地页、nitter.poast.org 拒绝连接、
+      //                              nitter.privacydev.net 证书不受信
+      //   api.vxtwitter.com      —— 一律 403
 
       async function extractTwitterVideo(url) {
         const tweetMatch = url.match(/(?:twitter\.com|x\.com|fxtwitter\.com|vxtwitter\.com|fixupx\.com)\/\w+\/status\/(\d+)/i);
@@ -1536,80 +1563,38 @@ video::-webkit-media-controls{display:flex!important}
         }
 
         const tweetId = tweetMatch[1];
+
+        // 三源并发竞速，谁先拿到就用谁，其余立刻 abort。
+        // fxtwitter 实测 200 且 ACAO:*，浏览器可以直连，是唯一稳定可用的源。
         const sources = [
           {
-            name: 'fxtwitter API',
-            fn: async () => {
-              const data = await tryFetchJson(`https://api.fxtwitter.com/status/${tweetId}`);
+            name: 'fxtwitter 直连',
+            fn: async (signal) => {
+              const data = await fetchJsonDirect(`https://api.fxtwitter.com/status/${tweetId}`, { timeout: 8000, signal });
               return data ? parseFxTwitterAll(data) : [];
             }
           },
           {
-            name: 'fxtwitter (代理)',
-            fn: async () => {
-              const data = await tryFetchViaProxy(`https://api.fxtwitter.com/status/${tweetId}`);
+            name: 'fxtwitter 经后端',
+            fn: async (signal) => {
+              const data = await fetchJson(`https://api.fxtwitter.com/status/${tweetId}`, { timeout: 12000, signal });
               return data ? parseFxTwitterAll(data) : [];
             }
           },
           {
-            name: 'Syndication API',
-            fn: async () => {
-              const data = await tryFetchJson(`https://cdn.syndication.twimg.com/tweet-result?id=${tweetId}&lang=en`);
+            name: 'syndication 经后端',
+            fn: async (signal) => {
+              const data = await fetchJson(syndicationUrl(tweetId), { timeout: 12000, signal });
               return data ? parseSyndicationAll(data) : [];
             }
-          },
-          {
-            name: 'Syndication (代理)',
-            fn: async () => {
-              const data = await tryFetchViaProxy(`https://cdn.syndication.twimg.com/tweet-result?id=${tweetId}&lang=en`);
-              return data ? parseSyndicationAll(data) : [];
-            }
-          },
-          {
-            name: 'vxtwitter API',
-            fn: async () => {
-              const data = await tryFetchJson(`https://api.vxtwitter.com/status/${tweetId}`);
-              return data ? parseFxTwitterAll(data) : [];
-            }
-          },
-          {
-            name: 'vxtwitter (代理)',
-            fn: async () => {
-              const data = await tryFetchViaProxy(`https://api.vxtwitter.com/status/${tweetId}`);
-              return data ? parseFxTwitterAll(data) : [];
-            }
-          },
-          {
-            name: 'twitsave',
-            fn: async () => {
-              const url = await tryExtractViaTwitsave(tweetId);
-              return url ? [url] : [];
-            }
-          },
-          {
-            name: '嵌入页解析',
-            fn: async () => {
-              const embedUrl = `https://platform.twitter.com/embed/Tweet.html?id=${tweetId}`;
-              const html = await fetchPageViaProxy(embedUrl);
-              if (!html) return [];
-              const matches = [...html.matchAll(/src=["']([^"']*twimg\.com[^"']*\.(?:mp4|m3u8)[^"']*)["']/g)];
-              if (matches.length) return matches.map(m => m[1]);
-              const raw = html.match(/(https?:\/\/[^\s"'<>]*twimg\.com[^\s"'<>]*\.(?:mp4|m3u8)[^\s"'<>]*)/i);
-              return raw ? [raw[1]] : [];
-            }
-          },
-          {
-            name: 'Nitter',
-            fn: () => tryExtractViaNitter(tweetId)
           }
         ];
 
-        for (const source of sources) {
-          setStatus('正在通过 ' + source.name + ' 解析...', '');
-          try {
-            const urls = await source.fn();
-            if (urls.length) return urls;
-          } catch { continue; }
+        setStatus('正在解析 Twitter 视频...', '');
+        const winner = await raceFirst(sources, 20000);
+        if (winner) {
+          setStatus('✅ 解析成功（' + winner.name + '）', 'success');
+          return winner.urls;
         }
 
         throw new Error('所有解析方式均失败，可能是该推文为私密账号或包含限制内容');
@@ -1706,10 +1691,10 @@ video::-webkit-media-controls{display:flex!important}
               <span style="font-size:36px;">🚫</span>
               <span style="font-size:16px;font-weight:700;color:#e2e8f0;">频道被 Telegram Web 屏蔽</span>
               <span style="font-size:13px;color:#94a3b8;text-align:center;line-height:1.6;">该频道被 Telegram 标记为限制内容<br>仅可在 Telegram 客户端内观看</span>
-              <button id="nsfwOpenBtn"
-                style="background:linear-gradient(135deg,#6366f1,#7c3aed);color:#fff;border:none;padding:12px 28px;border-radius:22px;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;margin-top:4px;">
+              <a href="${escapeAttr(rawUrl)}" target="_blank" rel="noopener noreferrer"
+                style="background:linear-gradient(135deg,#6366f1,#7c3aed);color:#fff;border:none;padding:12px 28px;border-radius:22px;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;margin-top:4px;text-decoration:none;display:inline-block;">
                 在 Telegram 客户端中打开
-              </button>
+              </a>
             </div>`;
         }
 
@@ -1717,12 +1702,6 @@ video::-webkit-media-controls{display:flex!important}
         resultCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
         saveHistory(url, 'telegram', rawUrl);
         setStatus('🚫 Telegram Web 屏蔽了该频道', '');
-
-        if (!isMobile) {
-          const btn = document.getElementById('nsfwOpenBtn');
-          if (btn) btn.addEventListener('click', () => window.open(rawUrl, '_blank'));
-          setTimeout(() => window.open(rawUrl, '_blank'), 600);
-        }
       }
 
       function isMobileDevice() {
@@ -1753,7 +1732,7 @@ video::-webkit-media-controls{display:flex!important}
               <span style="font-size:13px;color:#94a3b8;text-align:center;line-height:1.6;">该视频需在浏览器中登录 Telegram Web 后查看<br>请复制链接并手动粘贴到地址栏打开</span>
               <input id="privateChannelLinkInput" readonly
                 style="width:100%;max-width:300px;padding:10px 14px;border:1px solid #374151;border-radius:12px;background:#1a1a2e;color:#94a3b8;font-size:12px;font-family:monospace;text-align:center;outline:none;"
-                value="${rawUrl}">
+                value="${escapeAttr(rawUrl)}">
               <button id="privateChannelCopyBtn"
                 style="background:linear-gradient(135deg,#6366f1,#7c3aed);color:#fff;border:none;padding:12px 28px;border-radius:22px;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;">
                 复制链接并手动打开
@@ -1765,11 +1744,11 @@ video::-webkit-media-controls{display:flex!important}
             <div class="video-placeholder" style="padding:40px 20px;flex-direction:column;gap:16px;">
               <span style="font-size:36px;">🔒</span>
               <span style="font-size:16px;font-weight:700;color:#e2e8f0;">无法直接提取视频</span>
-              <span style="font-size:13px;color:#94a3b8;text-align:center;line-height:1.6;">该视频需要 Telegram 登录状态才能访问<br><span style="color:#6366f1;">正在新标签页中打开...</span></span>
-              <button id="privateChannelOpenBtn"
-                style="background:linear-gradient(135deg,#6366f1,#7c3aed);color:#fff;border:none;padding:12px 28px;border-radius:22px;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;margin-top:8px;">
+              <span style="font-size:13px;color:#94a3b8;text-align:center;line-height:1.6;">该视频需要 Telegram 登录状态才能访问<br><span style="color:#6366f1;">点击下方按钮，在 Telegram 里查看</span></span>
+              <a href="${escapeAttr(rawUrl)}" target="_blank" rel="noopener noreferrer"
+                style="background:linear-gradient(135deg,#6366f1,#7c3aed);color:#fff;border:none;padding:12px 28px;border-radius:22px;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;margin-top:8px;text-decoration:none;display:inline-block;">
                 在新标签页中打开
-              </button>
+              </a>
             </div>`;
         }
 
@@ -1788,10 +1767,7 @@ video::-webkit-media-controls{display:flex!important}
             });
           }
         } else {
-          setStatus('📺 新标签页已打开', '');
-          const btn = document.getElementById('privateChannelOpenBtn');
-          if (btn) btn.addEventListener('click', () => window.open(rawUrl, '_blank'));
-          setTimeout(() => window.open(rawUrl, '_blank'), 600);
+          setStatus('📺 点下方按钮在 Telegram 中打开', '');
         }
       }
 
@@ -1811,9 +1787,9 @@ video::-webkit-media-controls{display:flex!important}
         const isMobile = isMobileDevice();
 
         if (isMobile) {
-          videoContainer.innerHTML = `<div class="video-placeholder" style="padding:32px 20px;flex-direction:column;gap:14px;"><span style="font-size:36px;">�</span><span style="font-size:16px;font-weight:700;color:#e2e8f0;">视频已提取，需登录查看</span><span style="font-size:13px;color:#94a3b8;text-align:center;line-height:1.6;">视频地址已解析，请在浏览器中登录 Telegram Web 后查看<br>复制链接并手动粘贴到地址栏打开</span><input id="privateChannelLinkInput" readonly style="width:100%;max-width:300px;padding:10px 14px;border:1px solid #374151;border-radius:12px;background:#1a1a2e;color:#94a3b8;font-size:12px;font-family:monospace;text-align:center;outline:none;" value="${rawUrl}"><button id="privateChannelCopyBtn" style="background:linear-gradient(135deg,#6366f1,#7c3aed);color:#fff;border:none;padding:12px 28px;border-radius:22px;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;">复制链接并手动打开</button><span style="font-size:11px;color:#64748b;text-align:center;line-height:1.5;">复制后请粘贴到浏览器地址栏访问<br>（点击链接会跳转到 App）</span></div>`;
+          videoContainer.innerHTML = `<div class="video-placeholder" style="padding:32px 20px;flex-direction:column;gap:14px;"><span style="font-size:36px;">📋</span><span style="font-size:16px;font-weight:700;color:#e2e8f0;">视频已提取，需登录查看</span><span style="font-size:13px;color:#94a3b8;text-align:center;line-height:1.6;">视频地址已解析，请在浏览器中登录 Telegram Web 后查看<br>复制链接并手动粘贴到地址栏打开</span><input id="privateChannelLinkInput" readonly style="width:100%;max-width:300px;padding:10px 14px;border:1px solid #374151;border-radius:12px;background:#1a1a2e;color:#94a3b8;font-size:12px;font-family:monospace;text-align:center;outline:none;" value="${escapeAttr(rawUrl)}"><button id="privateChannelCopyBtn" style="background:linear-gradient(135deg,#6366f1,#7c3aed);color:#fff;border:none;padding:12px 28px;border-radius:22px;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;">复制链接并手动打开</button><span style="font-size:11px;color:#64748b;text-align:center;line-height:1.5;">复制后请粘贴到浏览器地址栏访问<br>（点击链接会跳转到 App）</span></div>`;
         } else {
-          videoContainer.innerHTML = `<div class="video-placeholder" style="padding:40px 20px;flex-direction:column;gap:14px;"><span style="font-size:36px;">🔒</span><span style="font-size:16px;font-weight:700;color:#e2e8f0;">视频已提取，需登录查看</span><span style="font-size:13px;color:#94a3b8;text-align:center;line-height:1.6;">视频地址已解析<br><span style="color:#6366f1;">正在新标签页中打开...</span></span><button id="privateChannelOpenBtn" style="background:linear-gradient(135deg,#6366f1,#7c3aed);color:#fff;border:none;padding:12px 28px;border-radius:22px;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;margin-top:4px;">在 Telegram Web 中播放</button><span style="font-size:11px;color:#64748b;">打开后长按视频即可保存到手机</span></div>`;
+          videoContainer.innerHTML = `<div class="video-placeholder" style="padding:40px 20px;flex-direction:column;gap:14px;"><span style="font-size:36px;">🔒</span><span style="font-size:16px;font-weight:700;color:#e2e8f0;">视频已提取，需登录查看</span><span style="font-size:13px;color:#94a3b8;text-align:center;line-height:1.6;">视频地址已解析<br><span style="color:#6366f1;">点击下方按钮，在 Telegram 里播放</span></span><a href="${escapeAttr(rawUrl)}" target="_blank" rel="noopener noreferrer" style="background:linear-gradient(135deg,#6366f1,#7c3aed);color:#fff;border:none;padding:12px 28px;border-radius:22px;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;margin-top:4px;text-decoration:none;display:inline-block;">在 Telegram Web 中播放</a><span style="font-size:11px;color:#64748b;">打开后长按视频即可保存到手机</span></div>`;
         }
 
         resultCard.classList.add('visible');
@@ -1831,10 +1807,7 @@ video::-webkit-media-controls{display:flex!important}
             });
           }
         } else {
-          setStatus('📺 新标签页已打开', '');
-          const btn = document.getElementById('privateChannelOpenBtn');
-          if (btn) btn.addEventListener('click', () => window.open(rawUrl, '_blank'));
-          setTimeout(() => window.open(rawUrl, '_blank'), 600);
+          setStatus('📺 点下方按钮在 Telegram 中打开', '');
         }
       }
 
@@ -1853,11 +1826,39 @@ video::-webkit-media-controls{display:flex!important}
 </body></html>`;
       }
 
+      // window.open 如果不是发生在用户手势的同一个任务里（我们前面 await 过网络请求），
+      // 就会被浏览器当弹窗拦截。拦了就退回一个真实的 <a>，让用户自己点。
+      function showManualOpenLink(url) {
+        const old = document.getElementById('manualOpenLink');
+        if (old) old.remove();
+        const a = document.createElement('a');
+        a.id = 'manualOpenLink';
+        a.href = url;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        a.textContent = '点这里打开';
+        a.style.cssText =
+          'display:inline-block;margin-top:12px;background:linear-gradient(135deg,#6366f1,#7c3aed);color:#fff;padding:10px 22px;border-radius:20px;font-size:14px;font-weight:700;text-decoration:none;';
+        resultCard.appendChild(a);
+        a.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+
+      function openExternal(url, tip) {
+        const win = window.open(url, '_blank');
+        if (win) {
+          try { win.opener = null; } catch {}
+          return true;
+        }
+        showToast(tip || '浏览器拦截了新窗口，请点下方链接打开');
+        showManualOpenLink(url);
+        return false;
+      }
+
       function openVideoDownloadPage(videoUrl) {
         const pageBlob = new Blob([buildVideoDownloadPage(videoUrl)], { type: 'text/html' });
         const pageUrl = URL.createObjectURL(pageBlob);
-        window.open(pageUrl, '_blank');
-        setTimeout(() => URL.revokeObjectURL(pageUrl), 120000);
+        openExternal(pageUrl, '浏览器拦截了新窗口，请点下方「点这里打开」');
+        setTimeout(() => URL.revokeObjectURL(pageUrl), 300000);
       }
 
       function formatSize(bytes) {
@@ -1901,13 +1902,13 @@ video::-webkit-media-controls{display:flex!important}
             showToast('✅ 已复制！请粘贴到浏览器地址栏打开');
             return;
           }
-          window.open(rawUrl, '_blank');
+          openExternal(rawUrl, '浏览器拦截了新窗口，请点下方链接在 Telegram 中打开');
           showToast('已在新标签页打开，长按视频即可保存');
           return;
         }
 
         if (/t\.me/.test(url)) {
-          window.open(url, '_blank');
+          openExternal(url, '浏览器拦截了新窗口，请点下方链接打开');
           showToast('已在新标签页打开，长按视频即可保存');
           return;
         }
@@ -1947,7 +1948,7 @@ video::-webkit-media-controls{display:flex!important}
           return;
         }
 
-        window.open(url, '_blank');
+        openExternal(url, '代理下载失败，请点下方链接打开后长按保存');
         showToast('下载失败，已在新标签页打开，请长按保存');
       }
 
