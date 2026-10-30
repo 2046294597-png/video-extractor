@@ -719,7 +719,7 @@
   <div class="app-container">
     <header class="header">
       <div class="logo">🎬</div>
-      <h1>视频提取器 <span style="font-size:11px;color:#64748b;font-weight:400;">v16</span></h1>
+      <h1>视频提取器 <span style="font-size:11px;color:#64748b;font-weight:400;">v17</span></h1>
       <p class="subtitle">支持 Telegram · Twitter / X 视频下载</p>
       <div class="platform-badges">
         <span class="platform-badge badge-tg">✈️ Telegram</span>
@@ -1541,11 +1541,22 @@ video::-webkit-media-controls{display:flex!important}
               attempts.push('后端 → 返回里没有 videoUrl');
             } else {
               let detail = '';
+              let code = '';
               try {
                 const j = await resp.json();
                 detail = (j && j.error) || '';
+                code = (j && j.code) || '';
               } catch {}
               attempts.push('后端 → HTTP ' + resp.status + (detail ? ' · ' + detail : ''));
+
+              // Telegram 网页版自己就不给这条视频（受限 / 成人频道），
+              // 不是网络问题，也不是我们的解析问题，别再拿代理重试一遍。
+              if (code === 'not_supported' || /not_supported/i.test(detail)) {
+                const e = new Error('Telegram 网页版不提供这条视频');
+                e.restricted = true;
+                e.attempts = attempts;
+                throw e;
+              }
 
               // 后端已经明确给出结论时，别再挨个试公共代理浪费时间
               if (resp.status === 404) {
@@ -1598,6 +1609,15 @@ video::-webkit-media-controls{display:flex!important}
 
           if (detectNSFWBlocked(html)) {
             throw { nsfwBlocked: true, channelUrl: cleanUrl };
+          }
+
+          // 播放器带 not_supported = Telegram 网页版自己不下发视频，
+          // 再换几个变体也是同一张缩略图，直接给出结论
+          if (/tgme_widget_message_video_player[^"]*not_supported|message_media_not_supported/i.test(html)) {
+            const e = new Error('Telegram 网页版不提供这条视频');
+            e.restricted = true;
+            e.attempts = attempts;
+            throw e;
           }
 
           let videoUrl = tryParseTGHtml(html);
@@ -1780,8 +1800,10 @@ video::-webkit-media-controls{display:flex!important}
             return;
           }
           if (platform === 'telegram') {
-            // 私有频道 ≠ 网络不通。前者渲染登录引导，后者把真实原因摊出来。
-            if (err && err.privateChannel) {
+            // 受限内容 ≠ 网络不通 ≠ 私有频道，三种情况分别渲染
+            if (err && err.restricted) {
+              showNSFWBlockedView(url);
+            } else if (err && err.privateChannel) {
               showPrivateChannelView(url);
             } else if (/t\.me\/c\/\d+/.test(url)) {
               showPrivateChannelView(url);
@@ -1818,19 +1840,19 @@ video::-webkit-media-controls{display:flex!important}
           videoContainer.innerHTML = `
             <div class="video-placeholder" style="padding:32px 20px;flex-direction:column;gap:12px;">
               <span style="font-size:36px;">🚫</span>
-              <span style="font-size:16px;font-weight:700;color:#e2e8f0;">频道被 Telegram Web 屏蔽</span>
-              <span style="font-size:13px;color:#94a3b8;text-align:center;line-height:1.6;">该频道因内容限制无法在网页端访问<br>但可在 Telegram 客户端内正常观看</span>
+              <span style="font-size:16px;font-weight:700;color:#e2e8f0;">Telegram 网页版不提供这条内容</span>
+              <span style="font-size:13px;color:#94a3b8;text-align:center;line-height:1.6;">受限内容（多为成人频道）在网页端只显示缩略图<br>Telegram 服务端不会下发视频地址，任何工具都取不到</span>
               <div style="background:#1a1a2e;border:1px solid #374151;border-radius:12px;padding:14px;width:100%;max-width:340px;text-align:left;">
-                <span style="font-size:12px;font-weight:700;color:#f87171;">解决方法：</span>
-                <br><span style="font-size:12px;color:#94a3b8;line-height:1.8;">1. 打开 Telegram 客户端<br>2. 播放该视频<br>3. 点击右上角「⋮」→ 保存到相册</span>
+                <span style="font-size:12px;font-weight:700;color:#f87171;">只能这样拿到视频：</span>
+                <br><span style="font-size:12px;color:#94a3b8;line-height:1.8;">1. 打开 Telegram 客户端播放该视频<br>2. 点右上角「⋮」→ 保存到相册</span>
               </div>
             </div>`;
         } else {
           videoContainer.innerHTML = `
             <div class="video-placeholder" style="padding:40px 20px;flex-direction:column;gap:14px;">
               <span style="font-size:36px;">🚫</span>
-              <span style="font-size:16px;font-weight:700;color:#e2e8f0;">频道被 Telegram Web 屏蔽</span>
-              <span style="font-size:13px;color:#94a3b8;text-align:center;line-height:1.6;">该频道被 Telegram 标记为限制内容<br>仅可在 Telegram 客户端内观看</span>
+              <span style="font-size:16px;font-weight:700;color:#e2e8f0;">Telegram 网页版不提供这条内容</span>
+              <span style="font-size:13px;color:#94a3b8;text-align:center;line-height:1.6;">受限内容（多为成人频道）在网页端只显示缩略图<br>服务端不下发视频地址，只能在客户端内观看</span>
               <a href="${escapeAttr(rawUrl)}" target="_blank" rel="noopener noreferrer"
                 style="background:linear-gradient(135deg,#6366f1,#7c3aed);color:#fff;border:none;padding:12px 28px;border-radius:22px;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;margin-top:4px;text-decoration:none;display:inline-block;">
                 在 Telegram 客户端中打开

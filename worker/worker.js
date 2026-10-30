@@ -68,7 +68,13 @@ export default {
         return json({ videoUrl: result.videoUrl, source: result.source }, 200);
       } catch (e) {
         const status = (e && e.status) || 500;
-        return json({ error: e && e.message ? e.message : 'Extraction failed' }, status);
+        return json(
+          {
+            error: e && e.message ? e.message : 'Extraction failed',
+            code: (e && e.code) || undefined,
+          },
+          status
+        );
       }
     }
 
@@ -180,11 +186,17 @@ async function extractTelegramVideo(url) {
   // 总预算：策略串行，每个再叠加 25 秒超时和重试会拖到几分钟，客户端早断开了
   const deadline = Date.now() + 25000;
 
+  // Telegram 网页版对受限内容（成人 / 被标记频道）只给一张缩略图，
+  // 播放器带 not_supported 类，页面里根本不出现视频地址。
+  // 这不是解析失败，是 Telegram 服务端拒绝下发，得如实告诉用户。
+  let sawNotSupported = false;
+
   for (const s of strategies) {
     const remaining = deadline - Date.now();
     if (remaining < 2000) break;
     const html = await fetchHtml(s.url, remaining);
     if (!html) continue;
+    if (isNotSupportedPage(html)) sawNotSupported = true;
     const videoUrl = parseHTMLForVideo(html, s.url);
     if (videoUrl) return { videoUrl, source: s.source };
   }
@@ -198,12 +210,27 @@ async function extractTelegramVideo(url) {
     }
   }
 
+  if (sawNotSupported) {
+    throw httpError(
+      'Telegram marks this post as not_supported for the web viewer (age-restricted ' +
+        'or restricted channel), so it never exposes a video URL. Open it in the Telegram app.',
+      422,
+      'not_supported'
+    );
+  }
+
   return null;
 }
 
-function httpError(message, status) {
+function isNotSupportedPage(html) {
+  return /tgme_widget_message_video_player[^"]*not_supported/i.test(html) ||
+    /message_media_not_supported/i.test(html);
+}
+
+function httpError(message, status, code) {
   const err = new Error(message);
   err.status = status;
+  if (code) err.code = code;
   return err;
 }
 
