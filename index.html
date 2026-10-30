@@ -719,7 +719,7 @@
   <div class="app-container">
     <header class="header">
       <div class="logo">🎬</div>
-      <h1>视频提取器 <span style="font-size:11px;color:#64748b;font-weight:400;">v14</span></h1>
+      <h1>视频提取器 <span style="font-size:11px;color:#64748b;font-weight:400;">v15</span></h1>
       <p class="subtitle">支持 Telegram · Twitter / X 视频下载</p>
       <div class="platform-badges">
         <span class="platform-badge badge-tg">✈️ Telegram</span>
@@ -898,6 +898,16 @@
         const list = [];
         if (HAS_WORKER) list.push((u) => WORKER_URL + '/proxy?url=' + encodeURIComponent(u));
         return list.concat(PROXIES);
+      }
+
+      // 把视频地址包成后端代理地址。
+      // 国内 telesco.pe / video.twimg.com 这两个 CDN 是连不上的，
+      // 而 Worker 在墙外，同一条地址经它转发就能取到。
+      function workerProxyUrl(url) {
+        if (!HAS_WORKER) return url;
+        if (!/^https?:\/\//i.test(url)) return url;
+        if (url.indexOf(WORKER_URL) === 0) return url;
+        return WORKER_URL + '/proxy?url=' + encodeURIComponent(url);
       }
 
       // 统一抓取入口：Worker 优先 → 公共代理 → 全失败返回 null。
@@ -1244,7 +1254,7 @@ video::-webkit-media-controls{display:flex!important}
 .e{display:none;color:#f87171;font-size:14px;text-align:center;padding:24px;font-family:-apple-system,sans-serif;position:absolute}
 .e b{display:block;font-size:12px;color:#94a3b8;margin-top:4px}
 </style></head><body>
-<video src="${videoUrl.replace(/"/g, '&quot;')}" controls playsinline
+<video src="${workerProxyUrl(videoUrl).replace(/"/g, '&quot;')}" controls playsinline
  onerror="document.querySelector('.e').style.display='block';this.style.display='none'"
  onloadedmetadata="document.querySelector('.e').style.display='none'"></video>
 <div class="e">⚠ 视频被平台拦截<br><b>请使用下方按钮下载</b></div>
@@ -1362,26 +1372,48 @@ video::-webkit-media-controls{display:flex!important}
         return !!(navigator.serviceWorker && navigator.serviceWorker.controller);
       }
 
-      // 直接 HEAD 问大小。telesco.pe / twimg.com 都带 ACAO:*，不需要走代理。
+      // 先直接问大小（telesco / twimg 带 ACAO:*，不走代理最快）。
+      // 国内这两家 CDN 常常连不上，直连失败就改走后端：
+      // 用 Range: bytes=0-0 拿 206 响应里的 Content-Range 总长，不下载正片。
       async function headContentLength(url) {
+        const direct = await probeContentLength(url, 'HEAD', null);
+        if (direct) return direct;
+        if (!HAS_WORKER) return 0;
+        return await probeContentLength(workerProxyUrl(url), 'GET', 'bytes=0-0');
+      }
+
+      async function probeContentLength(url, method, range) {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 9000);
         try {
-          const ctrl = new AbortController();
-          const timer = setTimeout(() => ctrl.abort(), 8000);
-          const resp = await fetch(url, { method: 'HEAD', signal: ctrl.signal });
+          const resp = await fetch(url, {
+            method,
+            headers: range ? { Range: range } : undefined,
+            signal: ctrl.signal,
+          });
           clearTimeout(timer);
-          if (!resp.ok) return 0;
-          return parseInt(resp.headers.get('content-length') || '0', 10) || 0;
+          const total = (resp.headers.get('content-range') || '').split('/').pop();
+          const len = parseInt(total, 10) || parseInt(resp.headers.get('content-length') || '0', 10) || 0;
+          if (resp.body) {
+            try { await resp.body.cancel(); } catch {}
+          }
+          const usable = resp.ok || resp.status === 206;
+          return usable ? len : 0;
         } catch {
+          clearTimeout(timer);
           return 0;
         }
       }
 
       function streamDownload(url, filename) {
         const name = filename || 'video.mp4';
+        // via：让 Service Worker 在直连 CDN 失败时改走这个后端转发
+        const via = HAS_WORKER ? '&via=' + encodeURIComponent(WORKER_URL) : '';
         const target =
           STREAM_ENDPOINT +
           '?url=' + encodeURIComponent(url) +
-          '&name=' + encodeURIComponent(name);
+          '&name=' + encodeURIComponent(name) +
+          via;
         const a = document.createElement('a');
         a.href = target;
         a.download = name;
@@ -1958,9 +1990,30 @@ video::-webkit-media-controls{display:flex!important}
           return 'HTTP 200';
         });
 
-        await probe('视频 CDN（telesco）', async (signal) => {
-          const resp = await fetch('https://cdn1.telesco.pe/', { method: 'HEAD', signal });
+        // 真正决定能不能下载的是这两项：直连 CDN，和经后端转发 CDN。
+        // 国内一般「直连 ❌ / 经后端 ✅」，那就说明视频必须走后端。
+        const cdnProbe =
+          (currentVideoUrls[0] && /telesco\.pe|twimg\.com/.test(currentVideoUrls[0]))
+            ? currentVideoUrls[0]
+            : 'https://cdn1.telesco.pe/';
+
+        await probe('视频 CDN（直连）', async (signal) => {
+          const resp = await fetch(cdnProbe, { method: 'HEAD', signal });
           return 'HTTP ' + resp.status; // 有响应就算通，状态码无所谓
+        });
+
+        await probe('视频 CDN（经后端）', async (signal) => {
+          if (!HAS_WORKER) throw new Error('未配置后端地址');
+          const resp = await fetch(workerProxyUrl(cdnProbe), {
+            headers: { Range: 'bytes=0-0' },
+            signal,
+          });
+          const total = (resp.headers.get('content-range') || '').split('/').pop();
+          if (resp.body) {
+            try { await resp.body.cancel(); } catch {}
+          }
+          if (!resp.ok && resp.status !== 206) throw new Error('HTTP ' + resp.status);
+          return 'HTTP ' + resp.status + (total ? ' · 共 ' + total + ' 字节' : '');
         });
 
         await probe('t.me 页面（走代理）', async (signal) => {
@@ -2030,7 +2083,7 @@ video::-webkit-media-controls{display:flex!important}
 @keyframes fadeOut{to{opacity:0}}
 </style></head><body>
 <div class="info">长按视频保存到手机</div>
-<video src="${videoUrl.replace(/"/g, '&quot;')}" controls playsinline autoplay></video>
+<video src="${workerProxyUrl(videoUrl).replace(/"/g, '&quot;')}" controls playsinline autoplay></video>
 </body></html>`;
       }
 

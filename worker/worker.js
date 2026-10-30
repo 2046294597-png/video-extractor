@@ -31,8 +31,9 @@ const ALLOWED_HOSTS = [
 ];
 
 const UPSTREAM_TIMEOUT_MS = 25000;
-// 视频本体可能是几十上百 MB，用 25 秒会把下载从中间掐断，代理单独放宽
-const PROXY_TIMEOUT_MS = 180000;
+// 视频本体可能是几十上百 MB，用 25 秒会把下载从中间掐断，代理单独放宽。
+// 1GB 的视频在手机上要下十几分钟，3 分钟不够用，给到 30 分钟。
+const PROXY_TIMEOUT_MS = 1800000;
 
 export default {
   async fetch(request) {

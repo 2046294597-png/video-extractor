@@ -1,4 +1,4 @@
-const CACHE_NAME = 'video-extractor-v14';
+const CACHE_NAME = 'video-extractor-v15';
 const PRECACHE = ['./', './index.html', './manifest.json'];
 
 // ===================== 大文件流式下载 =====================
@@ -29,6 +29,19 @@ function contentDisposition(name) {
   return 'attachment; filename="' + ascii + '"; filename*=UTF-8\'\'' + encodeURIComponent(name);
 }
 
+// via 是页面传进来的后端地址（`?via=https://xxx.workers.dev`）。
+// 国内直连 Telegram / Twitter 的 CDN 会被断流，这时改让 Worker 代取。
+// 必须校验，否则这个端点就成了「把任何 Worker 当下载中继」的开放入口。
+function viaAllowed(via) {
+  if (!via) return false;
+  try {
+    const u = new URL(via);
+    return u.protocol === 'https:' && (u.hostname.endsWith('.workers.dev') || hostAllowed(u.hostname));
+  } catch {
+    return false;
+  }
+}
+
 async function handleDownload(url, req) {
   const raw = url.searchParams.get('url');
   if (!raw) return new Response('missing url', { status: 400 });
@@ -55,12 +68,34 @@ async function handleDownload(url, req) {
   const range = req.headers.get('range');
   if (range) init.headers = { Range: range };
 
-  const upstream = await fetch(target.href, init);
-  if (!upstream.ok && upstream.status !== 206) {
-    return new Response('upstream ' + upstream.status, { status: 502 });
+  async function attempt(href) {
+    const resp = await fetch(href, init);
+    if ((!resp.ok && resp.status !== 206) || !resp.body) return null;
+    return resp;
   }
-  if (!upstream.body) {
-    return new Response('upstream returned no body', { status: 502 });
+
+  let upstream = null;
+  try {
+    upstream = await attempt(target.href);
+  } catch {
+    upstream = null;
+  }
+
+  // 直连失败（国内 CDN 被断 / 或 CDN 没开 CORS）就改走后端转发。
+  // Worker 的 /proxy 会原样转发 Range，所以断点续传仍然有效。
+  const via = url.searchParams.get('via');
+  if (!upstream && viaAllowed(via)) {
+    try {
+      upstream = await attempt(
+        via.replace(/\/+$/, '') + '/proxy?url=' + encodeURIComponent(target.href)
+      );
+    } catch {
+      upstream = null;
+    }
+  }
+
+  if (!upstream) {
+    return new Response('upstream unavailable', { status: 502 });
   }
 
   const headers = new Headers();
