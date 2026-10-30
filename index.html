@@ -719,7 +719,7 @@
   <div class="app-container">
     <header class="header">
       <div class="logo">🎬</div>
-      <h1>视频提取器 <span style="font-size:11px;color:#64748b;font-weight:400;">v13</span></h1>
+      <h1>视频提取器 <span style="font-size:11px;color:#64748b;font-weight:400;">v14</span></h1>
       <p class="subtitle">支持 Telegram · Twitter / X 视频下载</p>
       <div class="platform-badges">
         <span class="platform-badge badge-tg">✈️ Telegram</span>
@@ -902,20 +902,39 @@
 
       // 统一抓取入口：Worker 优先 → 公共代理 → 全失败返回 null。
       // accept(resp) 返回非 null 表示接受这次响应（可顺势消费 body）；返回 null 则换下一个代理。
+      // 每次调用都会把失败原因记进 lastProxyErrors，出错时能告诉用户「到底卡在哪」。
+      let lastProxyErrors = [];
+
+      function proxyLabel(url) {
+        try {
+          return new URL(url).hostname;
+        } catch {
+          return url;
+        }
+      }
+
       async function fetchWithProxies(targetUrl, { timeout = 20000, signal = null, accept = null } = {}) {
+        lastProxyErrors = [];
         for (const build of proxyBuilders()) {
+          const proxied = build(targetUrl);
+          const label = proxyLabel(proxied);
           const ctrl = new AbortController();
           const timer = setTimeout(() => ctrl.abort(), timeout);
           const onOuterAbort = () => ctrl.abort();
           if (signal) signal.addEventListener('abort', onOuterAbort, { once: true });
           try {
-            const resp = await fetch(build(targetUrl), { signal: ctrl.signal });
-            if (!resp.ok) continue;
+            const resp = await fetch(proxied, { signal: ctrl.signal });
+            if (!resp.ok) {
+              lastProxyErrors.push(label + ' → HTTP ' + resp.status);
+              continue;
+            }
             if (!accept) return resp;
             const accepted = await accept(resp);
             if (accepted !== null && accepted !== undefined) return accepted;
-          } catch {
-            // 这个代理不行，换下一个
+            lastProxyErrors.push(label + ' → 返回内容不可用');
+          } catch (e) {
+            const why = e && e.name === 'AbortError' ? '超时' : '网络不可达';
+            lastProxyErrors.push(label + ' → ' + why);
           } finally {
             clearTimeout(timer);
             if (signal) signal.removeEventListener('abort', onOuterAbort);
@@ -1463,27 +1482,55 @@ video::-webkit-media-controls{display:flex!important}
 
       async function extractTelegramVideo(url) {
         const cleanUrl = url.replace(/\?.*$/, '').replace(/\/$/, '');
+        const attempts = [];
 
         // --- 策略 A：Cloudflare Worker 服务端直连（最可靠）---
         if (HAS_WORKER) {
+          setStatus('正在通过后端解析...', '');
+          let resp = null;
           try {
-            setStatus('正在通过后端解析...', '');
-            const workerResp = await fetch(WORKER_URL + '/extract', {
+            resp = await fetch(WORKER_URL + '/extract', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ tgUrl: url }),
-              signal: AbortSignal.timeout(20000),
+              signal: AbortSignal.timeout(12000),
             });
-            if (workerResp.ok) {
-              const data = await workerResp.json();
-              if (data.videoUrl) {
+          } catch (e) {
+            attempts.push('后端 → ' + (e && e.name === 'TimeoutError' ? '连接超时' : '网络不可达'));
+          }
+
+          if (resp) {
+            if (resp.ok) {
+              const data = await resp.json().catch(() => null);
+              if (data && data.videoUrl) {
                 setStatus('✅ 解析成功（后端）', 'success');
                 return data.videoUrl.replace(/^http:\/\//i, 'https://');
               }
+              attempts.push('后端 → 返回里没有 videoUrl');
+            } else {
+              let detail = '';
+              try {
+                const j = await resp.json();
+                detail = (j && j.error) || '';
+              } catch {}
+              attempts.push('后端 → HTTP ' + resp.status + (detail ? ' · ' + detail : ''));
+
+              // 后端已经明确给出结论时，别再挨个试公共代理浪费时间
+              if (resp.status === 404) {
+                const e = new Error('后端已确认：这一帖里没有视频');
+                e.attempts = attempts;
+                throw e;
+              }
+              if (/private channel/i.test(detail)) {
+                const e = new Error('私有频道需要登录才能查看');
+                e.privateChannel = true;
+                e.attempts = attempts;
+                throw e;
+              }
             }
-          } catch {
-            // 后端不可用，继续走本地代理
           }
+        } else {
+          attempts.push('后端 → 未配置 WORKER_URL');
         }
 
         // --- 策略 B：经代理抓页面后本地解析 ---
@@ -1509,7 +1556,13 @@ video::-webkit-media-controls{display:flex!important}
 
           setStatus('正在尝试 ' + pageUrl + ' ...', '');
           const html = await fetchPageViaProxy(pageUrl, Math.min(15000, remaining));
-          if (!html) continue;
+          if (!html) {
+            attempts.push(
+              '抓 ' + pageUrl + ' → ' +
+              (lastProxyErrors.length ? lastProxyErrors.join('，') : '无响应')
+            );
+            continue;
+          }
 
           if (detectNSFWBlocked(html)) {
             throw { nsfwBlocked: true, channelUrl: cleanUrl };
@@ -1525,9 +1578,12 @@ video::-webkit-media-controls{display:flex!important}
             }
             return videoUrl.replace(/^http:\/\//i, 'https://');
           }
+          attempts.push('抓 ' + pageUrl + ' → 页面里没找到视频地址');
         }
 
-        throw new Error('解析失败：后端起不来，公共代理也都被拦截了。请稍后重试，或直接点「在 Telegram 中打开」。');
+        const err = new Error('后端和公共代理都没能取到这条视频');
+        err.attempts = attempts;
+        throw err;
       }
 
 
@@ -1692,7 +1748,14 @@ video::-webkit-media-controls{display:flex!important}
             return;
           }
           if (platform === 'telegram') {
-            showPrivateChannelView(url);
+            // 私有频道 ≠ 网络不通。前者渲染登录引导，后者把真实原因摊出来。
+            if (err && err.privateChannel) {
+              showPrivateChannelView(url);
+            } else if (/t\.me\/c\/\d+/.test(url)) {
+              showPrivateChannelView(url);
+            } else {
+              showExtractionFailedView(url, err);
+            }
             return;
           }
           inputWrapper.classList.add('error');
@@ -1814,6 +1877,106 @@ video::-webkit-media-controls{display:flex!important}
         } else {
           setStatus('📺 点下方按钮在 Telegram 中打开', '');
         }
+      }
+
+      // ===== 解析失败（不是私有频道，而是网络/后端真的不通）=====
+      // 以前所有 telegram 失败都渲染成「无法直接提取视频 / 需要登录」，
+      // 网络被墙和后端挂掉看起来一模一样，用户完全没法自查。这里把每次
+      // 尝试的真实结果摊开，并给一个能在浏览器里跑的连通性检测。
+      function showExtractionFailedView(url, err) {
+        const cfg = PLATFORM_CONFIG.telegram;
+        platformTag.textContent = cfg.tagLabel;
+        platformTag.className = `platform-tag ${cfg.tagClass}`;
+        resultTitle.textContent = url;
+
+        const attempts = (err && err.attempts) || [];
+        const lines = attempts.length
+          ? attempts.map((a) => escapeHtml(a)).join('<br>')
+          : '（这次没有记录到更多细节）';
+
+        videoContainer.innerHTML = `
+          <div class="video-placeholder" style="padding:28px 18px;flex-direction:column;gap:12px;">
+            <span style="font-size:32px;">📡</span>
+            <span style="font-size:16px;font-weight:700;color:#e2e8f0;">解析失败</span>
+            <span style="font-size:13px;color:#94a3b8;text-align:center;line-height:1.6;">${escapeHtml((err && err.message) || '未知错误')}</span>
+            <div id="extractFailDetail"
+              style="width:100%;max-width:460px;padding:10px 12px;border-radius:10px;background:#0f172a;border:1px solid #1e293b;color:#94a3b8;font-size:11px;font-family:ui-monospace,Consolas,monospace;line-height:1.7;text-align:left;word-break:break-all;">${lines}</div>
+            <button id="netCheckBtn"
+              style="background:linear-gradient(135deg,#6366f1,#7c3aed);color:#fff;border:none;padding:11px 26px;border-radius:22px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;">
+              检测本机网络能否连上后端
+            </button>
+            <a href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer"
+              style="font-size:12px;color:#818cf8;text-decoration:none;">在 Telegram 中打开</a>
+          </div>`;
+
+        resultCard.classList.add('visible');
+        resultCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        setStatus('❌ 解析失败', 'error');
+
+        const btn = document.getElementById('netCheckBtn');
+        if (btn) {
+          btn.addEventListener('click', async () => {
+            btn.disabled = true;
+            btn.textContent = '检测中…（约 20 秒）';
+            const results = await runNetCheck();
+            const box = document.getElementById('extractFailDetail');
+            if (box) {
+              box.innerHTML = results
+                .map((r) => (r.ok ? '✅ ' : '❌ ') + escapeHtml(r.label) + ' · ' + escapeHtml(r.detail))
+                .join('<br>');
+            }
+            btn.textContent = '重新检测';
+            btn.disabled = false;
+          });
+        }
+      }
+
+      // 从「浏览器这一侧」实际发请求，逐项判断能不能连上。
+      // 全是 ❌ 基本就是代理/梯子没生效；只有 t.me 红则说明墙拦了 telegram。
+      async function runNetCheck() {
+        const results = [];
+
+        async function probe(label, fn) {
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 9000);
+          const t0 = Date.now();
+          try {
+            const detail = await fn(ctrl.signal);
+            results.push({ label, ok: true, detail: detail + ' · ' + (Date.now() - t0) + 'ms' });
+          } catch (e) {
+            const why = e && e.name === 'AbortError' ? '9 秒无响应' : ((e && e.message) || '失败');
+            results.push({ label, ok: false, detail: why });
+          } finally {
+            clearTimeout(timer);
+          }
+        }
+
+        await probe('后端 /health', async (signal) => {
+          if (!HAS_WORKER) throw new Error('未配置后端地址');
+          const resp = await fetch(WORKER_URL + '/health', { signal });
+          if (!resp.ok) throw new Error('HTTP ' + resp.status);
+          return 'HTTP 200';
+        });
+
+        await probe('视频 CDN（telesco）', async (signal) => {
+          const resp = await fetch('https://cdn1.telesco.pe/', { method: 'HEAD', signal });
+          return 'HTTP ' + resp.status; // 有响应就算通，状态码无所谓
+        });
+
+        await probe('t.me 页面（走代理）', async (signal) => {
+          const html = await fetchText('https://t.me/s/telegram', { timeout: 9000, signal });
+          if (!html) {
+            throw new Error(lastProxyErrors.length ? lastProxyErrors.join('，') : '所有代理都失败');
+          }
+          return '拿到 ' + html.length + ' 字符';
+        });
+
+        await probe('Twitter 接口', async (signal) => {
+          const resp = await fetch('https://api.fxtwitter.com/status/1', { signal });
+          return 'HTTP ' + resp.status;
+        });
+
+        return results;
       }
 
       function showPrivateChannelResult(videoUrl, sourceUrl) {
